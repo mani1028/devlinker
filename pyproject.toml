@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlinker"
-version = "0.1.0"
+version = "1.2.0"
 description = "AI-powered linking and automation tool"
 authors = [
     { name = "Mani", email = "mani1028@users.noreply.github.com" }

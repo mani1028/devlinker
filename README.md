@@ -4,7 +4,9 @@ Dev Linker runs frontend and backend dev servers, proxies both through a single 
 
 ## Features
 
-- Launches frontend and backend (when frontend and backend/app.py exist)
+- Launches frontend automatically (when frontend exists)
+- Auto-detects backend runtime (Docker Compose, Dockerfile, Node, or Python)
+- Auto-starts Python/Node backends; Docker is manual by default for reliability
 - Detects common frontend/backend ports
 - Serves both through one proxy at http://localhost:8000
 - Creates a public tunnel for sharing (Cloudflare first, ngrok fallback)
@@ -50,20 +52,26 @@ devlinker
 Typical startup output:
 
 ```text
-✨ Dev Linker v0.1.0
+Dev Linker v1.2.0
 
-🚀 Starting services...
-🔍 Detecting services...
-	• Frontend -> 5173
-	• Backend  -> 5000
+[INFO] Booting local services...
+[INFO] Detecting frontend/backend ports...
+[OK] Frontend -> 5173
+[OK] Backend  -> 5000
 
-🌐 Proxy ready at http://localhost:8000
+[OK] Proxy ready at http://localhost:8000
 
-⚡ Tunnel provider: Cloudflare
-🌍 Public URL:
-	https://xxxx.trycloudflare.com
+[OK] Tunnel provider: Cloudflare
+[OK] Public URL:
+    https://xxxx.trycloudflare.com
 
-👉 Share this link with anyone
+[INFO] Share this link with collaborators.
+
+Dev Linker Ready
+Frontend: http://localhost:5173
+Backend:  http://localhost:5000
+Proxy:    http://localhost:8000
+Public:   https://xxxx.trycloudflare.com
 ```
 
 Version check:
@@ -76,6 +84,12 @@ Optional overrides:
 
 ```bash
 devlinker --frontend 5173 --backend 5000
+```
+
+Enable Docker auto-start explicitly:
+
+```bash
+devlinker --docker
 ```
 
 If port 8000 is already in use:
@@ -99,6 +113,28 @@ fetch("/api/endpoint")
 ```
 
 Do not hardcode backend host URLs in frontend code.
+
+## Backend Auto-Detection
+
+Dev Linker checks backend runtime in this order:
+
+1. Docker Compose (`backend/docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`)
+2. Docker (`backend/Dockerfile`)
+3. Node (`backend/package.json`)
+4. Python (`backend/requirements.txt` or `backend/app.py`)
+
+Backend startup commands:
+
+- Docker Compose (default): manual run `docker compose up --build` in `backend/`
+- Dockerfile (default): manual run `docker build -t devlinker-backend .` then `docker run --rm -p 5000:5000 devlinker-backend`
+- Docker Compose/Dockerfile with `--docker`: Dev Linker runs those Docker commands for you
+- Node: `npm run dev` (or `npm start` when `dev` is missing)
+- Python: `python app.py`
+
+For containerized Flask backends, ensure:
+
+- App binds to all interfaces: `app.run(host="0.0.0.0", port=5000)`
+- Port mapping is present: `-p 5000:5000`
 
 ## Notes
 
