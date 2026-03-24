@@ -16,6 +16,10 @@ dist/
 build/
 *.egg-info/
 
+# Local demo/test apps
+frontend/
+backend/
+
 # Local environment files
 .env
 .env.*

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devlinker"
+version = "0.1.0"
+description = "AI-powered linking and automation tool"
+authors = [
+    { name = "Mani", email = "mani1028@users.noreply.github.com" }
+]
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = [
+    "click",
+    "flask",
+    "pyngrok",
+    "requests",
+]
+
+[project.scripts]
+devlinker = "devlinker.main:cli"
+
+[tool.setuptools.packages.find]
+include = ["devlinker*"]
