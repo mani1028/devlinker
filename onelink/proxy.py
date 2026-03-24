@@ -29,7 +29,7 @@ def _filter_headers(incoming: Dict[str, str]) -> Dict[str, str]:
 def _forward(target_url: str) -> Response:
     if request.headers.get("Upgrade", "").lower() == "websocket":
         return Response(
-            "WebSocket upgrade is not supported by the OneLink HTTP proxy. "
+            "WebSocket upgrade is not supported by the Dev Linker HTTP proxy. "
             "For shared links, run Vite with HMR disabled.",
             status=426,
         )

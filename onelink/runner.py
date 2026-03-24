@@ -48,7 +48,7 @@ def start_servers(frontend_dir: str = "frontend", backend_dir: str = "backend") 
 
     if frontend_path.exists() and frontend_path.is_dir():
         if any(is_vite_port(port, timeout=0.5) for port in (5173, 5174, 5175, 5176, 5177, 3000, 8080)):
-            print("[onelink] Frontend appears to already be running. Skipping launch.")
+            print("[dev-linker] Frontend appears to already be running. Skipping launch.")
         else:
             cmd = _frontend_command(frontend_path)
             cmd[0] = _resolve_command(cmd[0])
@@ -56,13 +56,13 @@ def start_servers(frontend_dir: str = "frontend", backend_dir: str = "backend") 
             env["ONELINK"] = "1"
             subprocess.Popen(cmd, cwd=frontend_path, env=env)  # noqa: S603
     else:
-        print("[onelink] Skipping frontend launch (frontend/ not found).")
+        print("[dev-linker] Skipping frontend launch (frontend/ not found).")
 
     app_py = backend_path / "app.py"
     if app_py.exists() and backend_path.is_dir():
         if check_port(5000, timeout=0.5):
-            print("[onelink] Backend appears to already be running. Skipping launch.")
+            print("[dev-linker] Backend appears to already be running. Skipping launch.")
         else:
             subprocess.Popen([sys.executable, "app.py"], cwd=backend_path)  # noqa: S603
     else:
-        print("[onelink] Skipping backend launch (backend/app.py not found).")
+        print("[dev-linker] Skipping backend launch (backend/app.py not found).")

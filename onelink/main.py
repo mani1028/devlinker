@@ -50,12 +50,12 @@ def _with_ngrok_skip_warning(url: str) -> str:
 
 
 @click.command()
-@click.version_option(version=__version__, prog_name="onelink")
+@click.version_option(version=__version__, prog_name="devlinker")
 @click.option("--frontend", type=int, default=None, help="Override detected frontend port.")
 @click.option("--backend", type=int, default=None, help="Override detected backend port.")
 @click.option("--proxy-port", type=int, default=8000, show_default=True, help="Proxy listen port.")
 def cli(frontend: int | None, backend: int | None, proxy_port: int) -> None:
-    print(f"\n✨ OneLink v{__version__}\n")
+    print(f"\n✨ Dev Linker v{__version__}\n")
     print("🚀 Starting services...")
 
     start_servers()
@@ -65,22 +65,22 @@ def cli(frontend: int | None, backend: int | None, proxy_port: int) -> None:
 
     if frontend_port is None:
         raise click.ClickException(
-            "Frontend not detected on common ports. Try: onelink --frontend 5173"
+            "Frontend not detected on common ports. Try: devlinker --frontend 5173"
         )
     if backend_port is None:
         raise click.ClickException(
-            "Backend not detected on common ports. Try: onelink --backend 5000"
+            "Backend not detected on common ports. Try: devlinker --backend 5000"
         )
 
     if not is_vite_port(frontend_port):
         raise click.ClickException(
             f"Frontend port {frontend_port} is reachable but does not look like a Vite dev server. "
-            "Run frontend with OneLink or pass the correct --frontend port."
+            "Run frontend with Dev Linker or pass the correct --frontend port."
         )
 
     if not check_port(backend_port):
         raise click.ClickException(
-            f"Backend port {backend_port} is not reachable. Try: onelink --backend 5000"
+            f"Backend port {backend_port} is not reachable. Try: devlinker --backend 5000"
         )
 
     proxy_port = _select_proxy_port(proxy_port)
@@ -112,7 +112,7 @@ def cli(frontend: int | None, backend: int | None, proxy_port: int) -> None:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nOneLink stopped.")
+        print("\nDev Linker stopped.")
 
 
 if __name__ == "__main__":

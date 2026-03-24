@@ -16,7 +16,7 @@ function App() {
 
   return (
     <main style={{ maxWidth: 720, margin: '64px auto', fontFamily: 'system-ui, sans-serif' }}>
-      <h1>OneLink Demo</h1>
+      <h1>Dev Linker Demo</h1>
       <p>Frontend is running. Click the button to call the backend via /api/test.</p>
       <button onClick={testApi} style={{ padding: '10px 18px', marginTop: 12 }}>
         Test API
