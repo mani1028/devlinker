@@ -36,34 +36,53 @@ def is_port_open(port: int) -> bool:
         return sock.connect_ex(("localhost", port)) == 0
 
 
-def _extract_host_port(ports_text: str, container_port: int) -> int | None:
-    # Covers typical Docker mappings: 0.0.0.0:32768->5000/tcp, [::]:32768->5000/tcp
-    pattern = rf"(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|::):(\d+)->{container_port}/tcp"
-    match = re.search(pattern, ports_text)
-    if match:
-        return int(match.group(1))
-    return None
+def _extract_port_mappings(ports_text: str) -> list[tuple[int, int]]:
+    # Handles mappings like 0.0.0.0:32768->5000/tcp, [::]:32768->5000/tcp, :::32768->5000/tcp.
+    pattern = re.compile(
+        r"(?:^|,\s*)(?:(?:\[[0-9a-fA-F:]+\]|:::|[0-9A-Za-z_.:-]+):)?(\d+)->(\d+)/(?:tcp|udp)"
+    )
+    mappings: list[tuple[int, int]] = []
+    for host_port, container_port in pattern.findall(ports_text):
+        mappings.append((int(host_port), int(container_port)))
+    return mappings
 
 
-def get_docker_backend_port(
+def _container_priority(name: str, container_port: int, default_container_port: int) -> int:
+    score = 0
+    lowered_name = name.lower()
+    if "backend" in lowered_name:
+        score += 6
+    if any(token in lowered_name for token in ("api", "server", "svc", "service")):
+        score += 3
+    if container_port == default_container_port:
+        score += 2
+
+    project_hint = Path.cwd().name.lower()
+    if len(project_hint) >= 3 and project_hint in lowered_name:
+        score += 5
+
+    return score
+
+
+def get_docker_backend_candidates(
     default_container_port: int = 5000,
     debug: bool = False,
-) -> tuple[int, str, int] | None:
+) -> list[tuple[str, int, int]]:
     try:
         output = subprocess.check_output(  # noqa: S603
             ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
             stderr=subprocess.DEVNULL,
         ).decode("utf-8", errors="ignore")
     except Exception:
-        return None
+        return []
 
     _debug_log(debug, "docker ps port map output:")
     if debug:
         for raw_line in output.splitlines():
             _debug_log(True, raw_line)
 
-    candidates: list[tuple[str, int]] = []
-    for line in output.splitlines():
+    candidates: list[tuple[str, int, int, int]] = []
+    for line_index, line in enumerate(output.splitlines()):
         stripped = line.strip()
         if not stripped:
             continue
@@ -76,23 +95,86 @@ def get_docker_backend_port(
                 continue
             name, ports = parts[0], parts[1]
 
-        host_port = _extract_host_port(ports, default_container_port)
-        if host_port is not None:
-            candidates.append((name, host_port))
+        mappings = _extract_port_mappings(ports)
+        if not mappings:
+            continue
+
+        for host_port, container_port in mappings:
+            candidates.append((name, host_port, container_port, line_index))
+            _debug_log(
+                debug,
+                (
+                    f"Candidate Docker port mapping: container='{name}', "
+                    f"host={host_port}, container={container_port}"
+                ),
+            )
 
     if not candidates:
-        return None
+        return []
 
-    # Prefer container names that look like backend services.
-    for name, port in candidates:
-        if "backend" in name.lower():
-            _debug_log(debug, f"Selected Docker backend container '{name}' on host port {port}")
-            return port, name, len(candidates)
+    # Score candidates by likely backend identity and prefer newest on ties.
+    ranked = sorted(
+        candidates,
+        key=lambda item: (-_container_priority(item[0], item[2], default_container_port), item[3]),
+    )
+    ordered: list[tuple[str, int, int]] = []
+    seen: set[tuple[str, int, int]] = set()
+    for name, host_port, container_port, _line_index in ranked:
+        key = (name, host_port, container_port)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
 
-    # docker ps is already newest-first; fallback to first match.
-    name, port = candidates[0]
-    _debug_log(debug, f"Selected first Docker match '{name}' on host port {port}")
-    return port, name, len(candidates)
+    if ordered:
+        name, host_port, container_port = ordered[0]
+        _debug_log(
+            debug,
+            (
+                f"Selected Docker container '{name}' with host port {host_port} "
+                f"(container port {container_port})"
+            ),
+        )
+
+    return ordered
+
+
+def _choose_backend_candidate(
+    local_port: int,
+    docker_candidates: list[tuple[str, int, int]],
+    debug: bool = False,
+) -> tuple[str, int, str | None, int | None]:
+    print("[INFO] Multiple backends detected:")
+    print(f"1. Local (localhost:{local_port})")
+    for index, (container_name, host_port, container_port) in enumerate(docker_candidates, start=2):
+        print(f"{index}. Docker: {container_name} (localhost:{host_port} -> {container_port})")
+    print("[INFO] Select backend [default: 1]: ", end="", flush=True)
+
+    try:
+        raw = input().strip()
+    except EOFError:
+        _debug_log(debug, "Interactive prompt unavailable (EOF); using local backend fallback")
+        return "local", local_port, None, None
+
+    if raw == "":
+        return "local", local_port, None, None
+
+    try:
+        selection = int(raw)
+    except ValueError:
+        _log("warn", "Invalid selection; using local backend")
+        return "local", local_port, None, None
+
+    if selection == 1:
+        return "local", local_port, None, None
+
+    docker_index = selection - 2
+    if 0 <= docker_index < len(docker_candidates):
+        container_name, host_port, container_port = docker_candidates[docker_index]
+        return "docker", host_port, container_name, container_port
+
+    _log("warn", "Selection out of range; using local backend")
+    return "local", local_port, None, None
 
 
 def _wait_for_port(port: int, retries: int = 5, delay_seconds: float = 1.0, debug: bool = False) -> bool:
@@ -107,6 +189,7 @@ def _wait_for_port(port: int, retries: int = 5, delay_seconds: float = 1.0, debu
 def detect_backend_port(
     default_port: int = 5000,
     override_port: int | None = None,
+    interactive: bool = False,
     debug: bool = False,
 ) -> int | None:
     started = time.perf_counter()
@@ -118,32 +201,63 @@ def detect_backend_port(
 
     _log("info", "Checking backend...")
     _debug_log(debug, f"Scanned local port: {default_port}")
-    if is_port_open(default_port):
+
+    local_open = is_port_open(default_port)
+    if not local_open:
+        _log("warn", f"Backend not found on port {default_port}")
+
+    _log("info", "Checking Docker containers...")
+    _debug_log(debug, f"Scanned Docker container target port: {default_port}")
+
+    docker_candidates = get_docker_backend_candidates(default_container_port=default_port, debug=debug)
+
+    if local_open and docker_candidates:
+        if interactive and sys.stdin.isatty():
+            source, selected_port, container_name, container_port = _choose_backend_candidate(
+                local_port=default_port,
+                docker_candidates=docker_candidates,
+                debug=debug,
+            )
+            if source == "local":
+                _log("ok", f"Backend detected (Local) -> port {selected_port}")
+                _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
+                return selected_port
+
+            if _wait_for_port(selected_port, retries=5, delay_seconds=1.0, debug=debug):
+                _log("ok", f"Backend detected (Docker: {container_name}) -> port {selected_port}")
+                _debug_log(debug, f"Selected Docker container port: {container_port}")
+                _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
+                return selected_port
+            _log("warn", f"Docker mapped port {selected_port} found but backend is not ready yet")
+        else:
+            _log("info", f"Docker candidate also detected: {docker_candidates[0][0]} -> {docker_candidates[0][1]}")
+            _debug_log(debug, "Interactive backend picker disabled or no TTY; using local-first priority")
+            _log("ok", f"Backend detected (Local) -> port {default_port}")
+            _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
+            return default_port
+
+    if local_open:
         _log("ok", f"Backend detected (Local) -> port {default_port}")
         _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
         return default_port
 
-    _log("warn", f"Backend not found on port {default_port}")
-    _log("info", "Checking Docker containers...")
-    _debug_log(debug, f"Scanned Docker container target port: {default_port}")
-
-    docker_match = get_docker_backend_port(default_container_port=default_port, debug=debug)
-    if docker_match is not None:
-        docker_port, container_name, match_count = docker_match
-        if match_count > 1:
-            _log("warn", "Multiple backend containers found")
+    if docker_candidates:
+        container_name, docker_port, container_port = docker_candidates[0]
+        if len(docker_candidates) > 1:
+            _log("warn", f"Multiple Docker containers published ports ({len(docker_candidates)} candidates)")
             _log("info", f"Using: {container_name}")
         if _wait_for_port(docker_port, retries=5, delay_seconds=1.0, debug=debug):
-            _log("ok", f"Backend detected (Docker) -> port {docker_port}")
+            _log("ok", f"Backend detected (Docker: {container_name}) -> port {docker_port}")
+            _debug_log(debug, f"Selected Docker container port: {container_port}")
             _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
             return docker_port
         _log("warn", f"Docker mapped port {docker_port} found but backend is not ready yet")
 
-    _log("error", "Backend not detected")
+    _log("error", "No backend found")
     print("Checked:")
     print(f"- localhost:{default_port}")
     print("- Docker containers")
-    print("Next step:")
+    print("Tip:")
     print("  - Start Flask: python app.py")
     print("  - OR expose Docker port: -p 5000:5000")
     return None

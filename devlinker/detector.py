@@ -41,6 +41,18 @@ def _pick_open_port(
     return None
 
 
+def _ordered_unique_ports(*port_groups: Iterable[int]) -> list[int]:
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for group in port_groups:
+        for port in group:
+            if port in seen:
+                continue
+            seen.add(port)
+            ordered.append(port)
+    return ordered
+
+
 def detect_ports(
     frontend: Optional[int] = None,
     backend: Optional[int] = None,
@@ -48,8 +60,13 @@ def detect_ports(
     delay_seconds: float = 1.0,
 ) -> Tuple[Optional[int], Optional[int]]:
     """Detect frontend and backend ports with retry support for slow startups."""
-    frontend_ports = [5173, 5174, 5175, 5176, 5177, 3000, 8080]
-    backend_ports = [5000, 8081]
+    frontend_ports = _ordered_unique_ports(
+        range(5173, 5191),
+        (3000, 4173, 8080),
+    )
+    backend_ports = _ordered_unique_ports(
+        (5000, 8000, 8001, 8080, 8081, 3001),
+    )
 
     selected_frontend = frontend
     selected_backend = backend

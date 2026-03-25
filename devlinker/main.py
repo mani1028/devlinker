@@ -87,6 +87,12 @@ def _print_summary(
     help="Auto-start Docker backends (manual Docker is the default).",
 )
 @click.option("--no-tunnel", is_flag=True, help="Skip public tunnel and run local proxy only.")
+@click.option(
+    "--interactive-backend/--no-interactive-backend",
+    default=True,
+    show_default=True,
+    help="Prompt to choose backend when local and Docker candidates are both available.",
+)
 @click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging.")
 def cli(
     frontend: int | None,
@@ -94,6 +100,7 @@ def cli(
     proxy_port: int,
     auto_start_docker: bool,
     no_tunnel: bool,
+    interactive_backend: bool,
     debug: bool,
 ) -> None:
     started = time.perf_counter()
@@ -106,6 +113,7 @@ def cli(
     backend_port = detect_backend_port(
         default_port=5000,
         override_port=backend_port_override,
+        interactive=interactive_backend,
         debug=debug,
     )
     if backend_port is None:

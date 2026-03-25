@@ -8,6 +8,7 @@ Dev Linker runs frontend and backend dev servers, proxies both through a single 
 - Auto-detects backend runtime (Docker Compose, Dockerfile, Node, or Python)
 - Auto-starts Python/Node backends; Docker is manual by default for reliability
 - Detects common frontend/backend ports
+- Detects Vite frontend across dynamic fallback ports (5173-5190, plus common alternatives)
 - Supports Docker backend port auto-detection
 - Works with dynamic container host ports
 - No config needed for standard Flask/Docker flows
@@ -55,7 +56,7 @@ devlinker
 Typical startup output:
 
 ```text
-Dev Linker v0.2.0
+Dev Linker v1.2.2
 
 [INFO] Mode: Auto (Flask + Docker detection)
 [INFO] Booting local services...
@@ -110,6 +111,18 @@ Run local-only mode without tunnel:
 devlinker --no-tunnel
 ```
 
+Interactive backend selection (when local and Docker are both detected):
+
+```bash
+devlinker --interactive-backend
+```
+
+Disable interactive backend selection (keeps local-first behavior):
+
+```bash
+devlinker --no-interactive-backend
+```
+
 If port 8000 is already in use:
 
 ```bash
@@ -127,6 +140,12 @@ Default behavior also tries fallback ports automatically when 8000 is busy:
 - 8002
 - 18000
 
+Frontend detection behavior:
+
+- Scans Vite defaults and fallback ports (`5173` through `5190`)
+- Also checks common alternatives (`3000`, `4173`, `8080`)
+- Retries during startup to catch slow boot cases
+
 ## Important Frontend Rule
 
 Frontend requests must use relative API paths:
@@ -142,9 +161,14 @@ Do not hardcode backend host URLs in frontend code.
 Backend port detection runs in this order:
 
 1. Check localhost port 5000
-2. If not found, check Docker port mappings for `->5000/tcp`
-3. Use the mapped host port automatically
-4. If nothing is found, print next-step guidance and exit
+2. If not found, parse all Docker host-to-container port mappings
+3. Rank containers by likely backend identity (name hints like backend/api plus project-name hints)
+4. Use the best mapped host port automatically, even when internal port is not 5000
+5. If nothing is found, print next-step guidance and exit
+
+When both Local and Docker backends are available, Dev Linker prompts you to choose one (TTY mode) unless `--no-interactive-backend` is used.
+
+If backend detection fails, Dev Linker prints a clear checklist showing what it checked and how to recover.
 
 Detection messages include source labels, for example:
 
