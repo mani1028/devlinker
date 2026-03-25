@@ -9,7 +9,7 @@ import click
 from . import __version__
 from .detector import check_port, detect_ports, is_vite_port
 from .proxy import start_proxy
-from .runner import start_servers
+from .runner import detect_backend_port, start_servers
 from .tunnel import start_tunnel
 
 
@@ -30,7 +30,8 @@ def _select_proxy_port(requested_port: int) -> int:
 
     for candidate in (8001, 8002, 18000):
         if not _is_port_in_use(candidate):
-            print(f"Port 8000 is busy. Falling back to proxy port {candidate}.")
+            print("[WARN] Port 8000 in use")
+            print(f"[INFO] Using proxy port: {candidate}")
             return candidate
 
     raise click.ClickException(
@@ -54,13 +55,15 @@ def _print_summary(
     backend_port: int,
     proxy_port: int,
     public_url: str | None,
+    startup_seconds: float,
 ) -> None:
-    print("\nDev Linker Ready")
+    print(f"\nDevLinker Ready (in {startup_seconds:.1f}s)")
     print(f"Frontend: http://localhost:{frontend_port}")
     print(f"Backend:  http://localhost:{backend_port}")
     print(f"Proxy:    http://localhost:{proxy_port}")
     if public_url:
-        print(f"Public:   {public_url}")
+        print(f"PUBLIC URL: {public_url}")
+        print("Tip: Press Ctrl+Click to open link")
     else:
         print("Public:   unavailable (local proxy still active)")
 
@@ -68,7 +71,14 @@ def _print_summary(
 @click.command()
 @click.version_option(version=__version__, prog_name="devlinker")
 @click.option("--frontend", type=int, default=None, help="Override detected frontend port.")
-@click.option("--backend", type=int, default=None, help="Override detected backend port.")
+@click.option(
+    "--backend",
+    "--backend-port",
+    "backend_port_override",
+    type=int,
+    default=None,
+    help="Override detected backend port.",
+)
 @click.option("--proxy-port", type=int, default=8000, show_default=True, help="Proxy listen port.")
 @click.option(
     "--docker",
@@ -76,19 +86,33 @@ def _print_summary(
     is_flag=True,
     help="Auto-start Docker backends (manual Docker is the default).",
 )
+@click.option("--no-tunnel", is_flag=True, help="Skip public tunnel and run local proxy only.")
+@click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging.")
 def cli(
     frontend: int | None,
-    backend: int | None,
+    backend_port_override: int | None,
     proxy_port: int,
     auto_start_docker: bool,
+    no_tunnel: bool,
+    debug: bool,
 ) -> None:
+    started = time.perf_counter()
     print(f"\nDev Linker v{__version__}")
+    print("[INFO] Mode: Auto (Flask + Docker detection)")
     print("[INFO] Booting local services...")
 
     start_servers(auto_start_docker=auto_start_docker)
 
+    backend_port = detect_backend_port(
+        default_port=5000,
+        override_port=backend_port_override,
+        debug=debug,
+    )
+    if backend_port is None:
+        raise SystemExit(1)
+
     print("[INFO] Detecting frontend/backend ports...")
-    frontend_port, backend_port = detect_ports(frontend=frontend, backend=backend)
+    frontend_port, backend_port = detect_ports(frontend=frontend, backend=backend_port)
 
     if frontend_port is None:
         raise click.ClickException(
@@ -123,22 +147,32 @@ def cli(
 
     print(f"\n[OK] Proxy ready at http://localhost:{proxy_port}\n")
     warning_free_url: str | None = None
-    try:
-        print("[INFO] Opening public tunnel...")
-        provider, public_url = start_tunnel(proxy_port)
-        warning_free_url = _with_ngrok_skip_warning(public_url)
-        provider_label = "Cloudflare" if provider == "cloudflare" else "ngrok"
-        print(f"[OK] Tunnel provider: {provider_label}")
-        print("[OK] Public URL:")
-        print(f"     {warning_free_url}\n")
-        print("[INFO] Share this link with collaborators.")
-    except RuntimeError as exc:
-        print(f"[WARN] Tunnel failed: {exc}")
-        print("[INFO] Next step: install cloudflared or configure ngrok auth.")
-        print("[INFO] Tip: run 'ngrok config add-authtoken <token>' for ngrok fallback.")
-        print(f"[OK] Continuing with local proxy at http://localhost:{proxy_port}")
+    if no_tunnel:
+        print("[INFO] Tunnel disabled by --no-tunnel; local proxy only.")
+    else:
+        try:
+            print("[INFO] Opening public tunnel...")
+            provider, public_url = start_tunnel(proxy_port)
+            warning_free_url = _with_ngrok_skip_warning(public_url)
+            provider_label = "Cloudflare" if provider == "cloudflare" else "ngrok"
+            print(f"[OK] Tunnel provider: {provider_label}")
+            print("[OK] Public URL:")
+            print(f"     {warning_free_url}\n")
+            print("Tip: Press Ctrl+Click to open link")
+            print("[INFO] Share this link with collaborators.")
+        except RuntimeError as exc:
+            print(f"[WARN] Tunnel failed: {exc}")
+            print("[INFO] Next step: install cloudflared or configure ngrok auth.")
+            print("[INFO] Tip: run 'ngrok config add-authtoken <token>' for ngrok fallback.")
+            print(f"[OK] Continuing with local proxy at http://localhost:{proxy_port}")
 
-    _print_summary(frontend_port, backend_port, proxy_port, warning_free_url)
+    _print_summary(
+        frontend_port,
+        backend_port,
+        proxy_port,
+        warning_free_url,
+        startup_seconds=time.perf_counter() - started,
+    )
 
     try:
         while True:

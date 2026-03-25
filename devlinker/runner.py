@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -20,6 +23,130 @@ def _log(level: str, message: str) -> None:
     }
     prefix = prefix_map.get(level, "[INFO]")
     print(f"{prefix} {message}")
+
+
+def _debug_log(enabled: bool, message: str) -> None:
+    if enabled:
+        print(f"[DEBUG] {message}")
+
+
+def is_port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        return sock.connect_ex(("localhost", port)) == 0
+
+
+def _extract_host_port(ports_text: str, container_port: int) -> int | None:
+    # Covers typical Docker mappings: 0.0.0.0:32768->5000/tcp, [::]:32768->5000/tcp
+    pattern = rf"(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|::):(\d+)->{container_port}/tcp"
+    match = re.search(pattern, ports_text)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def get_docker_backend_port(
+    default_container_port: int = 5000,
+    debug: bool = False,
+) -> tuple[int, str, int] | None:
+    try:
+        output = subprocess.check_output(  # noqa: S603
+            ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
+            stderr=subprocess.DEVNULL,
+        ).decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    _debug_log(debug, "docker ps port map output:")
+    if debug:
+        for raw_line in output.splitlines():
+            _debug_log(True, raw_line)
+
+    candidates: list[tuple[str, int]] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if "\t" in stripped:
+            name, ports = stripped.split("\t", 1)
+        else:
+            parts = stripped.split(maxsplit=1)
+            if len(parts) != 2:
+                continue
+            name, ports = parts[0], parts[1]
+
+        host_port = _extract_host_port(ports, default_container_port)
+        if host_port is not None:
+            candidates.append((name, host_port))
+
+    if not candidates:
+        return None
+
+    # Prefer container names that look like backend services.
+    for name, port in candidates:
+        if "backend" in name.lower():
+            _debug_log(debug, f"Selected Docker backend container '{name}' on host port {port}")
+            return port, name, len(candidates)
+
+    # docker ps is already newest-first; fallback to first match.
+    name, port = candidates[0]
+    _debug_log(debug, f"Selected first Docker match '{name}' on host port {port}")
+    return port, name, len(candidates)
+
+
+def _wait_for_port(port: int, retries: int = 5, delay_seconds: float = 1.0, debug: bool = False) -> bool:
+    for attempt in range(1, retries + 1):
+        if is_port_open(port):
+            return True
+        _debug_log(debug, f"Port {port} not open yet (attempt {attempt}/{retries})")
+        time.sleep(delay_seconds)
+    return False
+
+
+def detect_backend_port(
+    default_port: int = 5000,
+    override_port: int | None = None,
+    debug: bool = False,
+) -> int | None:
+    started = time.perf_counter()
+
+    if override_port is not None:
+        _log("info", f"Using backend port override: {override_port}")
+        _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
+        return override_port
+
+    _log("info", "Checking backend...")
+    _debug_log(debug, f"Scanned local port: {default_port}")
+    if is_port_open(default_port):
+        _log("ok", f"Backend detected (Local) -> port {default_port}")
+        _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
+        return default_port
+
+    _log("warn", f"Backend not found on port {default_port}")
+    _log("info", "Checking Docker containers...")
+    _debug_log(debug, f"Scanned Docker container target port: {default_port}")
+
+    docker_match = get_docker_backend_port(default_container_port=default_port, debug=debug)
+    if docker_match is not None:
+        docker_port, container_name, match_count = docker_match
+        if match_count > 1:
+            _log("warn", "Multiple backend containers found")
+            _log("info", f"Using: {container_name}")
+        if _wait_for_port(docker_port, retries=5, delay_seconds=1.0, debug=debug):
+            _log("ok", f"Backend detected (Docker) -> port {docker_port}")
+            _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
+            return docker_port
+        _log("warn", f"Docker mapped port {docker_port} found but backend is not ready yet")
+
+    _log("error", "Backend not detected")
+    print("Checked:")
+    print(f"- localhost:{default_port}")
+    print("- Docker containers")
+    print("Next step:")
+    print("  - Start Flask: python app.py")
+    print("  - OR expose Docker port: -p 5000:5000")
+    return None
 
 
 def _detect_backend_mode(backend_path: Path) -> str | None:

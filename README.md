@@ -8,6 +8,9 @@ Dev Linker runs frontend and backend dev servers, proxies both through a single 
 - Auto-detects backend runtime (Docker Compose, Dockerfile, Node, or Python)
 - Auto-starts Python/Node backends; Docker is manual by default for reliability
 - Detects common frontend/backend ports
+- Supports Docker backend port auto-detection
+- Works with dynamic container host ports
+- No config needed for standard Flask/Docker flows
 - Serves both through one proxy at http://localhost:8000
 - Creates a public tunnel for sharing (Cloudflare first, ngrok fallback)
 - Terminal-first workflow
@@ -16,8 +19,8 @@ Dev Linker runs frontend and backend dev servers, proxies both through a single 
 ## Project Structure
 
 ```text
-onelink/
-├── onelink/
+devlinker/
+├── devlinker/
 │   ├── __init__.py
 │   ├── main.py
 │   ├── runner.py
@@ -40,7 +43,7 @@ pip install .
 After publishing to PyPI:
 
 ```bash
-pip install dev-linker
+pip install devlinker
 ```
 
 ## Run
@@ -52,8 +55,9 @@ devlinker
 Typical startup output:
 
 ```text
-Dev Linker v1.2.0
+Dev Linker v0.2.0
 
+[INFO] Mode: Auto (Flask + Docker detection)
 [INFO] Booting local services...
 [INFO] Detecting frontend/backend ports...
 [OK] Frontend -> 5173
@@ -64,14 +68,16 @@ Dev Linker v1.2.0
 [OK] Tunnel provider: Cloudflare
 [OK] Public URL:
     https://xxxx.trycloudflare.com
+Tip: Press Ctrl+Click to open link
 
 [INFO] Share this link with collaborators.
 
-Dev Linker Ready
+DevLinker Ready (in 2.4s)
 Frontend: http://localhost:5173
 Backend:  http://localhost:5000
 Proxy:    http://localhost:8000
-Public:   https://xxxx.trycloudflare.com
+PUBLIC URL: https://xxxx.trycloudflare.com
+Tip: Press Ctrl+Click to open link
 ```
 
 Version check:
@@ -86,10 +92,22 @@ Optional overrides:
 devlinker --frontend 5173 --backend 5000
 ```
 
+Backend override alias:
+
+```bash
+devlinker --backend-port 3001
+```
+
 Enable Docker auto-start explicitly:
 
 ```bash
 devlinker --docker
+```
+
+Run local-only mode without tunnel:
+
+```bash
+devlinker --no-tunnel
 ```
 
 If port 8000 is already in use:
@@ -99,6 +117,11 @@ devlinker --frontend 5173 --backend 5000 --proxy-port 18000
 ```
 
 Default behavior also tries fallback ports automatically when 8000 is busy:
+
+```text
+[WARN] Port 8000 in use
+[INFO] Using proxy port: 8001
+```
 
 - 8001
 - 8002
@@ -115,6 +138,27 @@ fetch("/api/endpoint")
 Do not hardcode backend host URLs in frontend code.
 
 ## Backend Auto-Detection
+
+Backend port detection runs in this order:
+
+1. Check localhost port 5000
+2. If not found, check Docker port mappings for `->5000/tcp`
+3. Use the mapped host port automatically
+4. If nothing is found, print next-step guidance and exit
+
+Detection messages include source labels, for example:
+
+```text
+[OK] Backend detected (Local) -> port 5000
+```
+
+Example Docker dynamic-port message:
+
+```text
+[WARN] Backend not found on port 5000
+[INFO] Checking Docker containers...
+[OK] Backend detected (Docker) -> port 32768
+```
 
 Dev Linker checks backend runtime in this order:
 
