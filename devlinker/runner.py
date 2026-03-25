@@ -37,13 +37,31 @@ def is_port_open(port: int) -> bool:
 
 
 def _extract_port_mappings(ports_text: str) -> list[tuple[int, int]]:
-    # Handles mappings like 0.0.0.0:32768->5000/tcp, [::]:32768->5000/tcp, :::32768->5000/tcp.
+    """
+    Extracts host and container ports from docker ps output.
+    Handles:
+      - 0.0.0.0:8000->8000/tcp
+      - [::]:8000->8000/tcp
+      - :::8000->8000/tcp
+      - 8000->8000/tcp
+    
+    Skips unmapped ports (e.g., "8000/tcp" without a host binding).
+    """
+    # Skip if no host mappings present (unmapped ports are not useful externally).
+    if "->" not in ports_text:
+        return []
+    
+    # This regex specifically captures the host port (Group 1) and container port (Group 2)
+    # while optionally ignoring any IP binding prefix.
     pattern = re.compile(
-        r"(?:^|,\s*)(?:(?:\[[0-9a-fA-F:]+\]|:::|[0-9A-Za-z_.:-]+):)?(\d+)->(\d+)/(?:tcp|udp)"
+        r"(?:(?:\d{1,3}(?:\.\d{1,3}){3}|\[[a-fA-F0-9:]+\]|:::):)?(\d+)->(\d+)/(?:tcp|udp)"
     )
+    
     mappings: list[tuple[int, int]] = []
-    for host_port, container_port in pattern.findall(ports_text):
-        mappings.append((int(host_port), int(container_port)))
+    for match in pattern.finditer(ports_text):
+        host_port = int(match.group(1))
+        container_port = int(match.group(2))
+        mappings.append((host_port, container_port))
     return mappings
 
 
