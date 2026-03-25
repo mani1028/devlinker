@@ -8,24 +8,28 @@ import requests
 
 def check_port(port: int, timeout: float = 1.0) -> bool:
     """Return True when an HTTP service responds on localhost:port."""
-    try:
-        response = requests.get(f"http://127.0.0.1:{port}", timeout=timeout)
-        return response.status_code < 500
-    except requests.RequestException:
-        return False
+    for host in ("localhost", "127.0.0.1"):
+        try:
+            response = requests.get(f"http://{host}:{port}", timeout=timeout)
+            if response.status_code < 500:
+                return True
+        except requests.RequestException:
+            pass
+    return False
 
 
 def is_vite_port(port: int, timeout: float = 1.0) -> bool:
     """Return True when port looks like a Vite dev server."""
-    try:
-        response = requests.get(f"http://127.0.0.1:{port}/@vite/client", timeout=timeout)
-        if response.status_code != 200:
-            return False
-
-        content_type = response.headers.get("content-type", "").lower()
-        return "javascript" in content_type or "vite" in response.text[:400].lower()
-    except requests.RequestException:
-        return False
+    for host in ("localhost", "127.0.0.1"):
+        try:
+            response = requests.get(f"http://{host}:{port}/@vite/client", timeout=timeout)
+            if response.status_code == 200:
+                content_type = response.headers.get("content-type", "").lower()
+                if "javascript" in content_type or "vite" in response.text[:400].lower():
+                    return True
+        except requests.RequestException:
+            pass
+    return False
 
 
 def _pick_open_port(

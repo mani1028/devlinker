@@ -63,7 +63,7 @@ def _forward(target_url: str) -> Response:
 def api_proxy(path: str) -> Response:
     if BACKEND is None:
         return Response("Backend is not configured.", status=503)
-    return _forward(f"http://127.0.0.1:{BACKEND}/api/{path}")
+    return _forward(f"http://localhost:{BACKEND}/api/{path}")
 
 
 @app.route("/", defaults={"path": ""}, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
@@ -72,7 +72,7 @@ def frontend_proxy(path: str) -> Response:
     if FRONTEND is None:
         return Response("Frontend is not configured.", status=503)
 
-    target = f"http://127.0.0.1:{FRONTEND}/{path}" if path else f"http://127.0.0.1:{FRONTEND}/"
+    target = f"http://localhost:{FRONTEND}/{path}" if path else f"http://localhost:{FRONTEND}/"
     return _forward(target)
 
 
