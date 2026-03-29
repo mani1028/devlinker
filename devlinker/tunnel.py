@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 def stop_tunnel():
     """Stop all active tunnels (Cloudflare/ngrok)."""
     # Stop ngrok tunnels
     try:
         for tunnel in ngrok.get_tunnels():
-            ngrok.disconnect(tunnel.public_url)
+            public_url = getattr(tunnel, "public_url", None)
+            if public_url is not None:
+                ngrok.disconnect(public_url)
     except Exception:
         pass
     # Stop cloudflared processes
@@ -14,7 +18,6 @@ def stop_tunnel():
         except Exception:
             pass
     _CLOUDFLARED_PROCESSES.clear()
-from __future__ import annotations
 
 import re
 import shutil
@@ -58,7 +61,21 @@ def _try_cloudflare(proxy_port: int, startup_timeout: float = 12.0) -> str | Non
         stdout, _ = process.communicate(timeout=startup_timeout)
         output = stdout or ""
     except TimeoutExpired as exc:
-        output = (exc.stdout or "") + (exc.stderr or "")
+        # exc.stdout and exc.stderr may be str, bytes, bytearray, or memoryview; convert to str
+        def to_str(val):
+            if isinstance(val, str):
+                return val
+            if isinstance(val, (bytes, bytearray)):
+                return val.decode(errors="replace")
+            if isinstance(val, memoryview):
+                return val.tobytes().decode(errors="replace")
+            return str(val) if val is not None else ""
+        exc_stdout = to_str(exc.stdout)
+        exc_stderr = to_str(exc.stderr)
+        output = exc_stdout + exc_stderr
+
+    if not isinstance(output, str):
+        output = str(output)
 
     url = _extract_trycloudflare_url(output)
     if url:
@@ -71,22 +88,30 @@ def _try_cloudflare(proxy_port: int, startup_timeout: float = 12.0) -> str | Non
 
 def _disconnect_existing_tunnels() -> None:
     for tunnel in ngrok.get_tunnels():
-        ngrok.disconnect(tunnel.public_url)
+        public_url = getattr(tunnel, "public_url", None)
+        if public_url is not None:
+            ngrok.disconnect(public_url)
 
 
-def _start_ngrok_tunnel(proxy_port: int) -> str:
+def _start_ngrok_tunnel(proxy_port: int) -> str | None:
     try:
-        tunnel = ngrok.connect(proxy_port)
-        return tunnel.public_url
+        tunnel = ngrok.connect(str(proxy_port))
+        public_url = getattr(tunnel, "public_url", None)
+        if public_url is not None:
+            return public_url
+        return None
     except PyngrokError as exc:
         message = str(exc).lower()
 
         # If a prior endpoint is still active, disconnect and retry once.
-        if "already online" in message or "endpoint" in message and "online" in message:
+        if "already online" in message or ("endpoint" in message and "online" in message):
             try:
                 _disconnect_existing_tunnels()
-                tunnel = ngrok.connect(proxy_port)
-                return tunnel.public_url
+                tunnel = ngrok.connect(str(proxy_port))
+                public_url = getattr(tunnel, "public_url", None)
+                if public_url is not None:
+                    return public_url
+                return None
             except PyngrokError as retry_exc:
                 raise RuntimeError(
                     f"Failed to start ngrok tunnel after disconnect retry: {retry_exc}"
@@ -113,7 +138,9 @@ def start_tunnel(proxy_port: int = 8000) -> tuple[str, str]:
 
     try:
         ngrok_url = _start_ngrok_tunnel(proxy_port)
-        return "ngrok", ngrok_url
+        if ngrok_url is not None:
+            return "ngrok", ngrok_url
+        raise RuntimeError("Ngrok tunnel did not return a public URL.")
     except RuntimeError as ngrok_error:
         raise RuntimeError(
             "No tunnel available.\n"

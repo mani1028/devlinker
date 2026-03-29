@@ -207,10 +207,27 @@ async def _forward_http(request: Request) -> Response:
     for s in ai_suggestions:
         print_fix(s)
 
+    # Only inject loader for HTML responses, not localhost
+    headers = _filter_response_headers(dict(upstream.headers))
+    content_type = headers.get("content-type", "")
+    is_html = "text/html" in content_type
+    is_public = not (request.client and request.client.host in ("127.0.0.1", "localhost"))
+    content = upstream.content
+    if is_html and is_public:
+        try:
+            html = content.decode(upstream.encoding or "utf-8", errors="replace")
+            # Only inject if </body> exists
+            if "</body>" in html:
+                with open(__import__('os').path.join(__import__('os').path.dirname(__file__), "devlinker_loader_snippet.html"), encoding="utf-8") as f:
+                    loader = f.read()
+                html = html.replace("</body>", loader + "</body>")
+                content = html.encode(upstream.encoding or "utf-8")
+        except Exception:
+            pass
     return Response(
-        content=upstream.content,
+        content=content,
         status_code=upstream.status_code,
-        headers=_filter_response_headers(dict(upstream.headers)),
+        headers=headers,
     )
 
 
