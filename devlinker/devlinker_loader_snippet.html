@@ -112,7 +112,7 @@
 <script>
 const start = Date.now();
 function hideLoader() {
-  const minTime = 800; // 0.8 sec branding
+  const minTime = 1000; // 1 sec branding (increased from 0.8s)
   const elapsed = Date.now() - start;
   const delay = Math.max(0, minTime - elapsed);
   setTimeout(() => {
@@ -124,5 +124,5 @@ function hideLoader() {
   }, delay);
 }
 window.addEventListener("load", hideLoader);
-setTimeout(hideLoader, 5000);
+setTimeout(hideLoader, 7000); // max 7s (increased from 5s)
 </script>

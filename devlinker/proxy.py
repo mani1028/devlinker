@@ -243,7 +243,7 @@ async def _forward_http(request: Request) -> Response:
             # Only inject if </body> exists
             if "</body>" in html:
                 import os
-                loader_file = "devlinker_loader_snippet.html" if is_public else "devlinker_loader_minimal.html"
+                loader_file = "devlinker_loader_snippet.html"
                 with open(os.path.join(os.path.dirname(__file__), loader_file), encoding="utf-8") as f:
                     loader = f.read()
                 html = html.replace("</body>", loader + "</body>")
