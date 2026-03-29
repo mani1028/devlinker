@@ -6,15 +6,50 @@ from typing import Iterable, Optional, Tuple
 import requests
 
 
-def check_port(port: int, timeout: float = 1.0) -> bool:
-    """Return True when an HTTP service responds on localhost:port."""
+DEFAULT_BACKEND_PROBE_PATHS = (
+    "/health",
+    "/api/health",
+    "/",
+)
+
+
+def check_port(
+    port: int,
+    timeout: float = 1.0,
+    probe_paths: Iterable[str] = DEFAULT_BACKEND_PROBE_PATHS,
+) -> bool:
+    """Return True when an HTTP service is reachable on localhost:port.
+
+    Probe order is health-first (for API-style backends), then root fallback.
+    """
+    normalized_paths: list[str] = []
+    for path in probe_paths:
+        cleaned = path.strip()
+        if not cleaned:
+            continue
+        if not cleaned.startswith("/"):
+            cleaned = f"/{cleaned}"
+        normalized_paths.append(cleaned)
+
+    if not normalized_paths:
+        normalized_paths = ["/"]
+
     for host in ("localhost", "127.0.0.1"):
-        try:
-            response = requests.get(f"http://{host}:{port}", timeout=timeout)
-            if response.status_code < 500:
+        for path in normalized_paths:
+            try:
+                response = requests.get(f"http://{host}:{port}{path}", timeout=timeout)
+            except requests.RequestException:
+                continue
+
+            # Health endpoints must return 2xx/3xx to be considered ready.
+            if path in {"/health", "/api/health"}:
+                if 200 <= response.status_code < 400:
+                    return True
+                continue
+
+            # Root fallback accepts non-error responses.
+            if 200 <= response.status_code < 400:
                 return True
-        except requests.RequestException:
-            pass
     return False
 
 
