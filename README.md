@@ -243,6 +243,34 @@ The test spins up lightweight local frontend and backend apps, starts Dev Linker
 - `POST /api/login` is routed to backend
 - `ws://.../hmr` round-trip works through proxy
 
+## Troubleshooting Links
+
+If local or shared links show blank pages, connection refused errors, or 404s, check these common causes:
+
+1. Docker backend binding
+
+- Symptom: `http://localhost:<backend-port>` refuses connection.
+- Cause: backend process inside container is bound to `127.0.0.1` instead of `0.0.0.0`.
+- Fix: run backend with host `0.0.0.0` (example FastAPI/Uvicorn: `uvicorn app.main:app --host 0.0.0.0 --port 8000`).
+
+2. API prefix mismatch
+
+- Symptom: frontend loads through Dev Linker but API calls return 404.
+- Cause: frontend calls `/api/...`, but backend routes are mounted without `/api` prefix.
+- Fix: expose backend routes under `/api` (or adjust frontend paths to match backend routes).
+
+3. Vite host restrictions
+
+- Symptom: direct Vite URL works, Dev Linker proxy URL is blank or blocked.
+- Cause: Vite host protections reject proxied host/port.
+- Fix: set Vite `server.host` and `server.allowedHosts` to allow proxy use.
+
+Quick isolate sequence:
+
+1. Open `http://localhost:<backend-port>/docs` (or `/health`) directly.
+2. Open Dev Linker local proxy URL and verify UI loads.
+3. Use browser network tab to check API status codes for `/api/*` requests.
+
 ## Real-Time Development
 
 - Run `devlinker` to share one combined frontend/backend URL.
