@@ -142,6 +142,30 @@ def _build_target_ws_url(port: int, path: str, query: str) -> str:
 
 
 async def _forward_http(request: Request) -> Response:
+    # Serve instant loader for local/LAN users unless X-DevLinker-Instant header is present
+    client_ip = request.client.host if request.client else None
+    def is_local_network(ip):
+        if not ip:
+            return False
+        if ip.startswith("127.") or ip == "localhost" or ip == "::1":
+            return False
+        if ip.startswith("192.168.") or ip.startswith("10."):
+            return True
+        if ip.startswith("172."):
+            try:
+                second = int(ip.split(".")[1])
+                return 16 <= second <= 31
+            except Exception:
+                return False
+        return False
+    is_local = is_local_network(client_ip)
+    is_instant = request.headers.get("x-devlinker-instant") == "1"
+    if is_local and not is_instant and request.method == "GET":
+        import os
+        loader_path = os.path.join(os.path.dirname(__file__), "devlinker_loader_instant.html")
+        with open(loader_path, encoding="utf-8") as f:
+            loader_html = f.read()
+        return Response(content=loader_html, status_code=200, media_type="text/html")
     from devlinker.logger import print_warning, print_fix
     from devlinker.detector_ai import DevLinkerAI
 
@@ -207,18 +231,20 @@ async def _forward_http(request: Request) -> Response:
     for s in ai_suggestions:
         print_fix(s)
 
-    # Only inject loader for HTML responses, not localhost
+    # Only inject loader for HTML responses, not localhost/loopback, but DO inject for LAN/WiFi clients
     headers = _filter_response_headers(dict(upstream.headers))
     content_type = headers.get("content-type", "")
     is_html = "text/html" in content_type
-    is_public = not (request.client and request.client.host in ("127.0.0.1", "localhost"))
+    is_public = client_ip and not is_local and (not client_ip.startswith("127.") and client_ip != "localhost" and client_ip != "::1")
     content = upstream.content
-    if is_html and is_public:
+    if is_html and (is_local or is_public):
         try:
             html = content.decode(upstream.encoding or "utf-8", errors="replace")
             # Only inject if </body> exists
             if "</body>" in html:
-                with open(__import__('os').path.join(__import__('os').path.dirname(__file__), "devlinker_loader_snippet.html"), encoding="utf-8") as f:
+                import os
+                loader_file = "devlinker_loader_snippet.html" if is_public else "devlinker_loader_minimal.html"
+                with open(os.path.join(os.path.dirname(__file__), loader_file), encoding="utf-8") as f:
                     loader = f.read()
                 html = html.replace("</body>", loader + "</body>")
                 content = html.encode(upstream.encoding or "utf-8")
