@@ -15,6 +15,28 @@ from websockets.exceptions import ConnectionClosed
 
 app = FastAPI()
 
+# --- RequestInspector: Real-time request analyzer ---
+from devlinker.detection_state import state
+class RequestInspector:
+    def analyze(self, path, status, target):
+        warnings = []
+        # 1. Missing /api prefix
+        if not path.startswith("/api") and target == "backend":
+            issue = "Possible missing '/api' prefix"
+            state.add(issue, level="MEDIUM", category="routing")
+            warnings.append(issue)
+        # 2. 404 detection
+        if status == 404:
+            issue = "Route not found → check backend route"
+            state.add(issue, level="HIGH", category="routing")
+            warnings.append(issue)
+        # 3. Upstream failure
+        if status == 502:
+            issue = "Backend unreachable"
+            state.add(issue, level="HIGH", category="network")
+            warnings.append(issue)
+        return warnings
+
 FRONTEND: Optional[int] = None
 BACKEND: Optional[int] = None
 HTTP_CLIENT: Optional[httpx.AsyncClient] = None
@@ -100,13 +122,28 @@ def _build_target_ws_url(port: int, path: str, query: str) -> str:
 
 
 async def _forward_http(request: Request) -> Response:
+    from devlinker.logger import print_warning, print_fix
+    from devlinker.detector_ai import DevLinkerAI
+
+    inspector = RequestInspector()
+    ai = DevLinkerAI()
+
     target_port = _target_port(request.url.path)
     if target_port is None:
         if request.url.path.startswith("/api"):
-            return PlainTextResponse("Backend is not configured.", status_code=503)
-        return PlainTextResponse("Frontend is not configured.", status_code=503)
+            status = 503
+            warnings = inspector.analyze(request.url.path, status, "backend")
+            for w in warnings:
+                print_warning(w)
+            return PlainTextResponse("Backend is not configured.", status_code=status)
+        status = 503
+        warnings = inspector.analyze(request.url.path, status, "frontend")
+        for w in warnings:
+            print_warning(w)
+        return PlainTextResponse("Frontend is not configured.", status_code=status)
 
     if HTTP_CLIENT is None:
+        print_warning("Proxy HTTP client is not ready.")
         return PlainTextResponse("Proxy HTTP client is not ready.", status_code=503)
 
     payload = await request.body()
@@ -121,7 +158,22 @@ async def _forward_http(request: Request) -> Response:
             headers=_filter_request_headers(dict(request.headers)),
         )
     except httpx.RequestError as exc:
-        return PlainTextResponse(f"Upstream unavailable: {exc}", status_code=502)
+        status = 502
+        warnings = inspector.analyze(request.url.path, status, "backend")
+        for w in warnings:
+            print_warning(w)
+        ai_suggestions = ai.analyze_failure(str(exc))
+        for s in ai_suggestions:
+            print_fix(s)
+        return PlainTextResponse(f"Upstream unavailable: {exc}", status_code=status)
+
+    # Analyze response for warnings and fixes
+    warnings = inspector.analyze(request.url.path, upstream.status_code, "backend")
+    for w in warnings:
+        print_warning(w)
+    ai_suggestions = ai.analyze_failure(str(upstream.text))
+    for s in ai_suggestions:
+        print_fix(s)
 
     return Response(
         content=upstream.content,

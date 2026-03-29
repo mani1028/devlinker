@@ -11,6 +11,9 @@ from .detector import check_port, detect_ports, is_vite_port
 from .proxy import start_proxy
 from .runner import detect_backend_port, start_servers
 from .tunnel import start_tunnel
+from .doctor import doctor
+from .fix import fix
+from .share import share, unshare
 
 
 def _is_port_in_use(port: int) -> bool:
@@ -50,6 +53,7 @@ def _with_ngrok_skip_warning(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
 
+
 def _print_summary(
     frontend_port: int,
     backend_port: int,
@@ -58,20 +62,23 @@ def _print_summary(
     wlan_url: str | None,
     startup_seconds: float,
 ) -> None:
-    print(f"\nDevLinker Ready (in {startup_seconds:.1f}s)")
-    print(f"Frontend: http://localhost:{frontend_port}")
-    print(f"Backend:  http://localhost:{backend_port}")
-    print("Access Links:")
-    print(f"Local:  http://localhost:{proxy_port}")
+    import click
+    banner = "\n" + ("═" * 36) + "\n🚀 DevLinker Ready\n" + ("═" * 36)
+    click.secho(f"{banner}", fg="green", bold=True)
+    click.secho(f"⏱️  Startup time: {startup_seconds:.1f}s\n", fg="yellow")
+    click.secho(f"Frontend: ", nl=False, fg="blue"); click.secho(f"http://localhost:{frontend_port}", fg="cyan", bold=True)
+    click.secho(f"Backend:  ", nl=False, fg="blue"); click.secho(f"http://localhost:{backend_port}", fg="cyan", bold=True)
+    click.secho("\nAccess Links:", fg="magenta", bold=True)
+    click.secho(f"  Local  → http://localhost:{proxy_port}", fg="white")
     if wlan_url:
-        print(f"WLAN:   {wlan_url}")
+        click.secho(f"  WLAN   → {wlan_url}", fg="white")
     else:
-        print("WLAN:   unavailable")
+        click.secho("  WLAN   → unavailable", fg="white")
     if public_url:
-        print(f"Public: {public_url}")
-        print("Tip: Press Ctrl+Click to open link")
+        click.secho(f"  Public → {public_url}", fg="cyan", bold=True)
+        click.secho("Tip: Press Ctrl+Click to open link", fg="magenta")
     else:
-        print("Public: unavailable (local proxy still active)")
+        click.secho("  Public → Disabled (use --url)", fg="yellow")
 
 
 def _get_local_ip() -> str | None:
@@ -124,6 +131,7 @@ def _wait_for_readiness(
     is_flag=True,
     help="Auto-start Docker backends (manual Docker is the default).",
 )
+@click.option("--url", is_flag=True, help="Enable public tunnel URL.")
 @click.option("--no-tunnel", is_flag=True, help="Skip public tunnel and run local proxy only.")
 @click.option(
     "--interactive-backend/--no-interactive-backend",
@@ -144,15 +152,18 @@ def cli(
     backend_port_override: int | None,
     proxy_port: int,
     auto_start_docker: bool,
+    url: bool,
     no_tunnel: bool,
     interactive_backend: bool,
     lan_enabled: bool,
     debug: bool,
 ) -> None:
+
     started = time.perf_counter()
-    print(f"\nDev Linker v{__version__}")
-    print("[INFO] Mode: Auto (FastAPI async proxy + Docker detection)")
-    print("[INFO] Booting local services...")
+    banner = "\n" + ("═" * 36) + f"\n⚡ Dev Linker v{__version__} ⚡\n" + ("═" * 36)
+    click.secho(banner, fg="green", bold=True)
+    click.secho("[INFO] Mode: Auto (FastAPI async proxy + Docker detection)", fg="blue")
+    click.secho("[INFO] Booting local services...", fg="blue")
 
     start_servers(auto_start_docker=auto_start_docker)
 
@@ -165,7 +176,7 @@ def cli(
     if backend_port is None:
         raise SystemExit(1)
 
-    print("[INFO] Detecting frontend/backend ports...")
+    click.secho("[INFO] Detecting frontend/backend ports...", fg="blue")
     frontend_port, backend_port = detect_ports(frontend=frontend, backend=backend_port)
 
     if frontend_port is None:
@@ -190,10 +201,10 @@ def cli(
 
     proxy_port = _select_proxy_port(proxy_port)
 
-    print(f"[OK] Frontend -> {frontend_port}")
-    print(f"[OK] Backend  -> {backend_port}\n")
+    click.secho(f"[OK] Frontend  → {frontend_port}", fg="green")
+    click.secho(f"[OK] Backend   → {backend_port}\n", fg="green")
 
-    print(f"[INFO] Starting proxy on :{proxy_port}...")
+    click.secho(f"[INFO] Starting proxy on :{proxy_port}...", fg="blue")
     start_proxy(frontend_port, backend_port, proxy_port=proxy_port)
 
     # Allow proxy thread to bind before opening tunnel.
@@ -204,32 +215,41 @@ def cli(
         local_ip = _get_local_ip()
         if local_ip:
             wlan_url = f"http://{local_ip}:{proxy_port}"
-            print(f"[OK] WLAN URL: {wlan_url}")
-            print("[INFO] Share WLAN link with teammates on same WiFi/LAN.")
+            click.secho(f"[OK] WLAN URL: {wlan_url}", fg="green")
+            click.secho("[INFO] Share WLAN link with teammates on same WiFi/LAN.", fg="blue")
         else:
-            print("[WARN] WLAN URL unavailable (no active LAN interface detected).")
-            print("[INFO] If LAN sharing fails, allow proxy port in firewall and use same network.")
+            click.secho("[WARN] WLAN URL unavailable (no active LAN interface detected).", fg="yellow")
+            click.secho("[INFO] If LAN sharing fails, allow proxy port in firewall and use same network.", fg="yellow")
 
-    print(f"\n[OK] Proxy ready at http://localhost:{proxy_port}\n")
+    click.secho(f"\n[OK] Proxy ready at http://localhost:{proxy_port}\n", fg="green", bold=True)
+
     warning_free_url: str | None = None
+    enable_tunnel = False
+    if url:
+        enable_tunnel = True
     if no_tunnel:
-        print("[INFO] Tunnel disabled by --no-tunnel; local proxy only.")
-    else:
+        enable_tunnel = False
+
+    if enable_tunnel:
         try:
-            print("[INFO] Opening public tunnel...")
+            click.secho("\n🌍 Enabling public tunnel...", fg="green", bold=True)
             provider, public_url = start_tunnel(proxy_port)
             warning_free_url = _with_ngrok_skip_warning(public_url)
             provider_label = "Cloudflare" if provider == "cloudflare" else "ngrok"
-            print(f"[OK] Tunnel provider: {provider_label}")
-            print("[OK] Public URL:")
-            print(f"     {warning_free_url}\n")
-            print("Tip: Press Ctrl+Click to open link")
-            print("[INFO] Share this link with collaborators.")
+            click.secho(f"[OK] Tunnel provider: {provider_label}", fg="blue")
+            click.secho(f"[OK] Public URL:", fg="blue")
+            click.secho(f"     {warning_free_url}\n", fg="cyan", bold=True)
+            click.secho("Tip: Press Ctrl+Click to open link", fg="magenta")
+            click.secho("[INFO] Share this link with collaborators.", fg="magenta")
         except RuntimeError as exc:
-            print(f"[WARN] Tunnel failed: {exc}")
-            print("[INFO] Next step: install cloudflared or configure ngrok auth.")
-            print("[INFO] Tip: run 'ngrok config add-authtoken <token>' for ngrok fallback.")
-            print(f"[OK] Continuing with local proxy at http://localhost:{proxy_port}")
+            click.secho(f"[WARN] Tunnel failed: {exc}", fg="red")
+            click.secho("[INFO] Next step: install cloudflared or configure ngrok auth.", fg="yellow")
+            click.secho("[INFO] Tip: run 'ngrok config add-authtoken <token>' for ngrok fallback.", fg="yellow")
+            click.secho(f"[OK] Continuing with local proxy at http://localhost:{proxy_port}", fg="green")
+    else:
+        click.secho("\n⚡ Skipping public tunnel (use --url to enable)", fg="yellow", bold=True)
+        click.secho("\n💡 Need to share outside network?", fg="magenta")
+        click.secho("👉 Run: devlinker --url", fg="magenta", bold=True)
 
     _print_summary(
         frontend_port,
@@ -244,8 +264,19 @@ def cli(
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n[INFO] Dev Linker stopped.")
+        click.secho("\n[INFO] Dev Linker stopped.", fg="yellow")
 
+
+@click.group()
+def main():
+    pass
+
+
+main.add_command(cli)
+main.add_command(doctor)
+main.add_command(fix)
+main.add_command(share)
+main.add_command(unshare)
 
 if __name__ == "__main__":
-    cli()
+    main()

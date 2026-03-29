@@ -2,20 +2,36 @@
 
 Dev Linker runs frontend and backend dev servers, proxies both through a single local port (8000), and creates a single public URL via Cloudflare or ngrok.
 
+
 ## Features
 
-- Launches frontend automatically (when frontend exists)
-- Auto-detects backend runtime (Docker Compose, Dockerfile, Node, or Python)
-- Auto-starts Python/Node backends; Docker is manual by default for reliability
-- Detects common frontend/backend ports
-- Detects Vite frontend across dynamic fallback ports (5173-5190, plus common alternatives)
-- Supports Docker backend port auto-detection
-- Works with dynamic container host ports
-- No config needed for standard FastAPI or Flask plus Docker flows
-- Serves both through one proxy at http://localhost:8000
-- Creates a public tunnel for sharing (Cloudflare first, ngrok fallback)
-- Terminal-first workflow
-- Supports CLI version output with --version
+- 🚀 **Unified Dev Proxy:** Combines frontend (Vite/React) and backend (FastAPI/Flask/Node/Docker) into a single local and public URL.
+- 🔍 **Auto Detection:** Detects frontend/backend ports, runtime, Docker containers, and Vite servers automatically.
+- 🧠 **Smart Detection & Doctor:** Real-time request analysis, backend intelligence, log analyzer, and `devlinker doctor` for instant diagnostics.
+- 🛡️ **Auto-Fix Engine:** `devlinker fix` applies safe fixes (like VITE_API_URL) and suggests code changes.
+- 🌍 **Public Sharing:** Share your local dev environment instantly with `--url` (startup) or `devlinker share` (runtime, no restart).
+- 🔄 **Dynamic Tunnel Control:** `devlinker unshare` disables public tunnel at runtime.
+- 📡 **WLAN Sharing:** Prints LAN URL for same-network device access.
+- 🧑‍💻 **Interactive CLI:** Modern, colorized, emoji-rich terminal UX for all commands.
+- 🧩 **Zero Config:** Works out-of-the-box for most FastAPI, Flask, Vite, and Docker projects.
+- 🧪 **Runtime Smoke Test:** Built-in test for end-to-end proxy validation.
+- 🛠️ **Extensible:** Modular architecture for future SaaS, dashboard, and team features.
+
+## CLI Commands & Options
+
+- `devlinker` — Start proxy (local only, fast)
+- `devlinker --url` — Start with public tunnel (Cloudflare/ngrok)
+- `devlinker share` — Enable public tunnel at runtime (no restart)
+- `devlinker unshare` — Disable public tunnel at runtime
+- `devlinker doctor` — Diagnose issues, see categorized problems and fixes
+- `devlinker fix` — Auto-fix common issues (env, API paths, config)
+- `devlinker --frontend 5173 --backend 5000` — Override detected ports
+- `devlinker --docker` — Auto-start Docker backend
+- `devlinker --no-tunnel` — Force local-only mode
+- `devlinker --no-lan` — Hide WLAN sharing URL
+- `devlinker --interactive-backend` — Prompt to choose backend if multiple found
+- `devlinker --proxy-port 18000` — Use custom proxy port
+- `devlinker --version` — Show version
 
 ## Project Structure
 
@@ -107,10 +123,49 @@ Enable Docker auto-start explicitly:
 devlinker --docker
 ```
 
-Run local-only mode without tunnel:
+
+## Tunnel and Sharing Modes
+
+By default, DevLinker starts **fast local proxy only** (no tunnel). To enable a public tunnel, use the `--url` flag:
+
+
+```bash
+devlinker --url
+```
+
+In your terminal output, you'll see:
+
+
+URL, run:
+
+```bash
+devlinker --url
+```
+
+This will start the proxy and open a public tunnel (Cloudflare or ngrok). The output will show:
+
+```text
+🌍 Enabling public tunnel...
+[OK] Tunnel provider: Cloudflare
+[OK] Public URL:
+     https://xxxx.trycloudflare.com
+Tip: Press Ctrl+Click to open link
+[INFO] Share this link with collaborators.
+```
+
+To force tunnel off (even if --url is passed):
 
 ```bash
 devlinker --no-tunnel
+```
+
+When running without `--url`, you’ll see:
+
+```text
+⚡ Skipping public tunnel (use --url to enable)
+
+💡 Need to share outside network?
+👉 Run: devlinker --url
 ```
 
 Disable WLAN URL output:
@@ -118,6 +173,21 @@ Disable WLAN URL output:
 ```bash
 devlinker --no-lan
 ```
+## Smart Detection & Auto-Fix System
+
+DevLinker now includes an AI-powered detection and auto-fix engine:
+
+- **Request Inspector:** Real-time analysis of proxy traffic for common mistakes (missing `/api` prefix, 404s, CORS risks, upstream failures)
+- **Backend Intelligence:** Probes backend endpoints and type at startup for smarter routing and hints
+- **Log Analyzer:** Converts error messages (CORS, 404, connection refused) into human-readable explanations and actionable fixes
+- **Smart Warning Engine:** Prints clean CLI warnings and suggestions, e.g.:
+
+```text
+⚠️  Detected direct backend call (localhost:5000)
+👉 Use /api/* instead of direct URL
+```
+
+All detection and fixes are modular, async-compatible, and production-ready. See `devlinker/proxy.py`, `devlinker/detector_ai.py`, and `devlinker/logger.py` for implementation.
 
 Interactive backend selection (when local and Docker are both detected):
 
