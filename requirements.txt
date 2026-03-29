@@ -1,4 +1,8 @@
-flask
-requests
+fastapi
+httpx
 pyngrok
 click
+docker
+requests
+uvicorn
+websockets

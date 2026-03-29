@@ -55,17 +55,55 @@ def _print_summary(
     backend_port: int,
     proxy_port: int,
     public_url: str | None,
+    wlan_url: str | None,
     startup_seconds: float,
 ) -> None:
     print(f"\nDevLinker Ready (in {startup_seconds:.1f}s)")
     print(f"Frontend: http://localhost:{frontend_port}")
     print(f"Backend:  http://localhost:{backend_port}")
-    print(f"Proxy:    http://localhost:{proxy_port}")
+    print("Access Links:")
+    print(f"Local:  http://localhost:{proxy_port}")
+    if wlan_url:
+        print(f"WLAN:   {wlan_url}")
+    else:
+        print("WLAN:   unavailable")
     if public_url:
-        print(f"PUBLIC URL: {public_url}")
+        print(f"Public: {public_url}")
         print("Tip: Press Ctrl+Click to open link")
     else:
-        print("Public:   unavailable (local proxy still active)")
+        print("Public: unavailable (local proxy still active)")
+
+
+def _get_local_ip() -> str | None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        ip_address = sock.getsockname()[0]
+        if ip_address and not ip_address.startswith("127."):
+            return ip_address
+        return None
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
+def _wait_for_readiness(
+    label: str,
+    port: int,
+    checker,
+    retries: int = 15,
+    delay_seconds: float = 1.0,
+) -> bool:
+    print(f"[INFO] Waiting for {label} on :{port}...")
+    for attempt in range(1, retries + 1):
+        if checker(port):
+            print(f"[OK] {label} ready on :{port}")
+            return True
+        if attempt < retries:
+            time.sleep(delay_seconds)
+    print(f"[WARN] {label} not ready on :{port} after {retries} checks")
+    return False
 
 
 @click.command()
@@ -93,6 +131,13 @@ def _print_summary(
     show_default=True,
     help="Prompt to choose backend when local and Docker candidates are both available.",
 )
+@click.option(
+    "--lan/--no-lan",
+    "lan_enabled",
+    default=True,
+    show_default=True,
+    help="Show WLAN sharing URL for devices on the same network.",
+)
 @click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging.")
 def cli(
     frontend: int | None,
@@ -101,11 +146,12 @@ def cli(
     auto_start_docker: bool,
     no_tunnel: bool,
     interactive_backend: bool,
+    lan_enabled: bool,
     debug: bool,
 ) -> None:
     started = time.perf_counter()
     print(f"\nDev Linker v{__version__}")
-    print("[INFO] Mode: Auto (Flask + Docker detection)")
+    print("[INFO] Mode: Auto (FastAPI async proxy + Docker detection)")
     print("[INFO] Booting local services...")
 
     start_servers(auto_start_docker=auto_start_docker)
@@ -131,13 +177,13 @@ def cli(
             "Backend not detected on common ports. Start backend first or set --backend (example: 5000)."
         )
 
-    if not is_vite_port(frontend_port):
+    if not _wait_for_readiness("Frontend", frontend_port, is_vite_port):
         raise click.ClickException(
             f"Frontend port {frontend_port} is reachable but does not look like a Vite dev server. "
             "Run frontend with Dev Linker or pass the correct --frontend port."
         )
 
-    if not check_port(backend_port):
+    if not _wait_for_readiness("Backend", backend_port, check_port):
         raise click.ClickException(
             f"Backend port {backend_port} is not reachable. Verify backend is running and listening on localhost."
         )
@@ -150,8 +196,19 @@ def cli(
     print(f"[INFO] Starting proxy on :{proxy_port}...")
     start_proxy(frontend_port, backend_port, proxy_port=proxy_port)
 
-    # Allow Flask thread to bind before opening tunnel.
+    # Allow proxy thread to bind before opening tunnel.
     time.sleep(1)
+
+    wlan_url: str | None = None
+    if lan_enabled:
+        local_ip = _get_local_ip()
+        if local_ip:
+            wlan_url = f"http://{local_ip}:{proxy_port}"
+            print(f"[OK] WLAN URL: {wlan_url}")
+            print("[INFO] Share WLAN link with teammates on same WiFi/LAN.")
+        else:
+            print("[WARN] WLAN URL unavailable (no active LAN interface detected).")
+            print("[INFO] If LAN sharing fails, allow proxy port in firewall and use same network.")
 
     print(f"\n[OK] Proxy ready at http://localhost:{proxy_port}\n")
     warning_free_url: str | None = None
@@ -179,6 +236,7 @@ def cli(
         backend_port,
         proxy_port,
         warning_free_url,
+        wlan_url,
         startup_seconds=time.perf_counter() - started,
     )
 

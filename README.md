@@ -11,7 +11,7 @@ Dev Linker runs frontend and backend dev servers, proxies both through a single 
 - Detects Vite frontend across dynamic fallback ports (5173-5190, plus common alternatives)
 - Supports Docker backend port auto-detection
 - Works with dynamic container host ports
-- No config needed for standard Flask/Docker flows
+- No config needed for standard FastAPI or Flask plus Docker flows
 - Serves both through one proxy at http://localhost:8000
 - Creates a public tunnel for sharing (Cloudflare first, ngrok fallback)
 - Terminal-first workflow
@@ -58,7 +58,7 @@ Typical startup output:
 ```text
 Dev Linker v1.2.2
 
-[INFO] Mode: Auto (Flask + Docker detection)
+[INFO] Mode: Auto (FastAPI async proxy + Docker detection)
 [INFO] Booting local services...
 [INFO] Detecting frontend/backend ports...
 [OK] Frontend -> 5173
@@ -76,8 +76,10 @@ Tip: Press Ctrl+Click to open link
 DevLinker Ready (in 2.4s)
 Frontend: http://localhost:5173
 Backend:  http://localhost:5000
-Proxy:    http://localhost:8000
-PUBLIC URL: https://xxxx.trycloudflare.com
+Access Links:
+Local:  http://localhost:8000
+WLAN:   http://192.168.1.5:8000
+Public: https://xxxx.trycloudflare.com
 Tip: Press Ctrl+Click to open link
 ```
 
@@ -109,6 +111,12 @@ Run local-only mode without tunnel:
 
 ```bash
 devlinker --no-tunnel
+```
+
+Disable WLAN URL output:
+
+```bash
+devlinker --no-lan
 ```
 
 Interactive backend selection (when local and Docker are both detected):
@@ -145,6 +153,7 @@ Frontend detection behavior:
 - Scans Vite defaults and fallback ports (`5173` through `5190`)
 - Also checks common alternatives (`3000`, `4173`, `8080`)
 - Retries during startup to catch slow boot cases
+- Performs readiness gating before proxy startup (waits until frontend looks like Vite and backend responds)
 
 ## Important Frontend Rule
 
@@ -161,10 +170,13 @@ Do not hardcode backend host URLs in frontend code.
 Backend port detection runs in this order:
 
 1. Check localhost port 5000
-2. If not found, parse all Docker host-to-container port mappings
-3. Rank containers by likely backend identity (name hints like backend/api plus project-name hints)
-4. Use the best mapped host port automatically, even when internal port is not 5000
-5. If nothing is found, print next-step guidance and exit
+2. If not found, query Docker via Docker SDK (`docker.from_env()`) for published host-to-container port mappings
+3. Prioritize containers using labels when present (`devlinker.role=backend`, optional `devlinker.port=<container-port>`)
+4. Otherwise rank containers by likely backend identity (name hints like backend/api plus project-name hints)
+5. Use the best mapped host port automatically, even when internal port is not 5000
+6. If nothing is found, print next-step guidance and exit
+
+If Docker SDK is unavailable, Dev Linker falls back to Docker CLI parsing as a compatibility path.
 
 When both Local and Docker backends are available, Dev Linker prompts you to choose one (TTY mode) unless `--no-interactive-backend` is used.
 
@@ -206,25 +218,33 @@ For containerized Flask backends, ensure:
 
 ## Notes
 
-- runner.py expects frontend project in frontend and Flask app in backend/app.py.
+- runner.py expects frontend project in frontend and Python app in backend/app.py.
 - If those paths do not exist, Dev Linker skips launch and only tries to detect already-running services.
 - Tunnel selection order is: cloudflared (TryCloudflare), then ngrok.
 - If cloudflared is unavailable and ngrok is not configured, Dev Linker prints one-time setup guidance.
 - You may need to set ngrok auth once on your machine using ngrok config add-authtoken <token>.
 - Dev Linker prints a public URL with `ngrok-skip-browser-warning=true` only when ngrok is used.
 - Startup output includes selected tunnel provider (`cloudflare` or `ngrok`).
-- When Dev Linker launches a Vite frontend, it sets `ONELINK=1` to disable Vite HMR WebSockets for stable tunnel behavior.
+- Proxy layer now supports WebSocket upgrades, including Vite HMR over shared links.
+- Proxy listens on `0.0.0.0` and can print a WLAN URL for same-network sharing.
+- If WLAN access fails on Windows, allow the proxy port in firewall and confirm devices are on the same network.
 
-## Real-Time Development Modes
+## Runtime Smoke Test
 
-### Option 1: Dev Linker sharing mode (recommended)
+Run this test to validate proxy behavior end-to-end (frontend HTTP route, backend API forwarding, and WebSocket pass-through):
+
+```bash
+python -m unittest tests.test_proxy_runtime
+```
+
+The test spins up lightweight local frontend and backend apps, starts Dev Linker proxy, and verifies:
+
+- `GET /` is routed to frontend
+- `POST /api/login` is routed to backend
+- `ws://.../hmr` round-trip works through proxy
+
+## Real-Time Development
 
 - Run `devlinker` to share one combined frontend/backend URL.
-- Open local Vite URL yourself for instant HMR updates.
-- Share Dev Linker/ngrok URL with others; they can use normal page refresh to see changes.
-
-### Option 2: Full remote HMR mode (bypass Dev Linker)
-
-- Start frontend and backend manually.
-- Configure Vite `server.proxy` for `/api` to backend.
-- Run `ngrok http <vite-port>` directly so Vite handles WebSocket HMR traffic.
+- Vite HMR and other WebSocket flows are proxied end-to-end through Dev Linker.
+- Keep using relative frontend API paths (for example, `/api/endpoint`) so routing stays consistent locally and over tunnel.

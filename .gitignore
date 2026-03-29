@@ -19,7 +19,7 @@ build/
 # Local demo/test apps
 frontend/
 backend/
-
+tests/
 # Local environment files
 .env
 .env.*

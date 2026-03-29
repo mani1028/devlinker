@@ -9,7 +9,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import List
+from typing import Any, List
+
+try:
+    import docker  # type: ignore
+except ImportError:  # pragma: no cover - optional fallback path
+    docker = None
 
 from .detector import check_port, is_vite_port
 
@@ -82,7 +87,129 @@ def _container_priority(name: str, container_port: int, default_container_port: 
     return score
 
 
-def get_docker_backend_candidates(
+def _normalize_label_port(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if 1 <= parsed <= 65535:
+        return parsed
+    return None
+
+
+def _extract_port_mappings_from_docker_sdk(container: Any) -> list[tuple[int, int]]:
+    mappings: list[tuple[int, int]] = []
+    ports = (container.attrs or {}).get("NetworkSettings", {}).get("Ports", {})
+    if not isinstance(ports, dict):
+        return mappings
+
+    for container_port_proto, bindings in ports.items():
+        if not isinstance(container_port_proto, str):
+            continue
+        try:
+            container_port = int(container_port_proto.split("/", 1)[0])
+        except (ValueError, IndexError):
+            continue
+        if not bindings:
+            continue
+        if not isinstance(bindings, list):
+            continue
+
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            host_port_str = binding.get("HostPort")
+            if not host_port_str:
+                continue
+            try:
+                host_port = int(host_port_str)
+            except (TypeError, ValueError):
+                continue
+            mappings.append((host_port, container_port))
+    return mappings
+
+
+def _docker_sdk_backend_candidates(
+    default_container_port: int = 5000,
+    debug: bool = False,
+) -> list[tuple[str, int, int]]:
+    if docker is None:
+        _debug_log(debug, "Docker SDK not installed; falling back to docker CLI parsing")
+        return []
+
+    try:
+        client = docker.from_env()
+        containers = client.containers.list()
+    except Exception as exc:
+        _debug_log(debug, f"Docker SDK unavailable ({exc}); falling back to docker CLI parsing")
+        return []
+
+    candidates: list[tuple[int, int, str, int, int, int]] = []
+    for index, container in enumerate(containers):
+        container_name = str(getattr(container, "name", "unknown"))
+        labels = getattr(container, "labels", {}) or {}
+        role_label = str(labels.get("devlinker.role", "")).strip().lower()
+        preferred_container_port = _normalize_label_port(labels.get("devlinker.port"))
+        if preferred_container_port is None:
+            preferred_container_port = _normalize_label_port(labels.get("devlinker.backend.port"))
+
+        mappings = _extract_port_mappings_from_docker_sdk(container)
+        if not mappings:
+            continue
+
+        for host_port, container_port in mappings:
+            priority = _container_priority(container_name, container_port, default_container_port)
+            if role_label == "backend":
+                priority += 20
+            elif role_label:
+                priority -= 2
+
+            if preferred_container_port is not None:
+                if container_port == preferred_container_port:
+                    priority += 12
+                else:
+                    priority -= 6
+
+            candidates.append((priority, index, container_name, host_port, container_port, preferred_container_port or 0))
+            _debug_log(
+                debug,
+                (
+                    f"SDK candidate: container='{container_name}', host={host_port}, "
+                    f"container={container_port}, role={role_label or '-'}, "
+                    f"label_port={preferred_container_port if preferred_container_port is not None else '-'}, "
+                    f"score={priority}"
+                ),
+            )
+
+    if not candidates:
+        return []
+
+    ranked = sorted(candidates, key=lambda item: (-item[0], item[1]))
+    ordered: list[tuple[str, int, int]] = []
+    seen: set[tuple[str, int, int]] = set()
+    for _score, _index, name, host_port, container_port, _label_port in ranked:
+        key = (name, host_port, container_port)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+
+    if ordered:
+        first_name, first_host_port, first_container_port = ordered[0]
+        _debug_log(
+            debug,
+            (
+                f"Selected Docker SDK container '{first_name}' with host port {first_host_port} "
+                f"(container port {first_container_port})"
+            ),
+        )
+
+    return ordered
+
+
+def _docker_cli_backend_candidates(
     default_container_port: int = 5000,
     debug: bool = False,
 ) -> list[tuple[str, int, int]]:
@@ -122,7 +249,7 @@ def get_docker_backend_candidates(
             _debug_log(
                 debug,
                 (
-                    f"Candidate Docker port mapping: container='{name}', "
+                    f"CLI candidate Docker mapping: container='{name}', "
                     f"host={host_port}, container={container_port}"
                 ),
             )
@@ -130,7 +257,6 @@ def get_docker_backend_candidates(
     if not candidates:
         return []
 
-    # Score candidates by likely backend identity and prefer newest on ties.
     ranked = sorted(
         candidates,
         key=lambda item: (-_container_priority(item[0], item[2], default_container_port), item[3]),
@@ -144,17 +270,24 @@ def get_docker_backend_candidates(
         seen.add(key)
         ordered.append(key)
 
-    if ordered:
-        name, host_port, container_port = ordered[0]
-        _debug_log(
-            debug,
-            (
-                f"Selected Docker container '{name}' with host port {host_port} "
-                f"(container port {container_port})"
-            ),
-        )
-
     return ordered
+
+
+def get_docker_backend_candidates(
+    default_container_port: int = 5000,
+    debug: bool = False,
+) -> list[tuple[str, int, int]]:
+    sdk_candidates = _docker_sdk_backend_candidates(
+        default_container_port=default_container_port,
+        debug=debug,
+    )
+    if sdk_candidates:
+        return sdk_candidates
+
+    return _docker_cli_backend_candidates(
+        default_container_port=default_container_port,
+        debug=debug,
+    )
 
 
 def _choose_backend_candidate(
