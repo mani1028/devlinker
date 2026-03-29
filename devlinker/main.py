@@ -13,7 +13,11 @@ from .runner import detect_backend_port, start_servers
 from .tunnel import start_tunnel
 from .doctor import doctor
 from .fix import fix
+
 from .share import share, unshare
+from .config import load_config
+from .inspect import inspect
+from .monitor import monitor
 
 
 def _is_port_in_use(port: int) -> bool:
@@ -147,6 +151,7 @@ def _wait_for_readiness(
     help="Show WLAN sharing URL for devices on the same network.",
 )
 @click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging.")
+
 def cli(
     frontend: int | None,
     backend_port_override: int | None,
@@ -158,6 +163,20 @@ def cli(
     lan_enabled: bool,
     debug: bool,
 ) -> None:
+    # Load config file if present
+    config = load_config()
+    # Use config values as defaults if CLI args are not set
+    if frontend is None:
+        frontend = config.get("frontend")
+    if backend_port_override is None:
+        backend_port_override = config.get("backend")
+    if proxy_port == 8000 and config.get("proxy_port"):
+        proxy_port = config["proxy_port"]
+    if not url and config.get("tunnel") is True:
+        url = True
+    if config.get("api_prefix"):
+        # Optionally pass api_prefix to proxy if needed in future
+        pass
 
     started = time.perf_counter()
     banner = "\n" + ("═" * 36) + f"\n⚡ Dev Linker v{__version__} ⚡\n" + ("═" * 36)
@@ -272,11 +291,14 @@ def main():
     pass
 
 
+
 main.add_command(cli)
 main.add_command(doctor)
 main.add_command(fix)
 main.add_command(share)
 main.add_command(unshare)
+main.add_command(inspect)
+main.add_command(monitor)
 
 if __name__ == "__main__":
     main()

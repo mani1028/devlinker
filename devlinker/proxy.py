@@ -16,7 +16,12 @@ from websockets.exceptions import ConnectionClosed
 app = FastAPI()
 
 # --- RequestInspector: Real-time request analyzer ---
+
 from devlinker.detection_state import state
+import threading
+_recent_requests = []
+_recent_lock = threading.Lock()
+
 class RequestInspector:
     def analyze(self, path, status, target):
         warnings = []
@@ -35,6 +40,11 @@ class RequestInspector:
             issue = "Backend unreachable"
             state.add(issue, level="HIGH", category="network")
             warnings.append(issue)
+        # Log request for inspector
+        with _recent_lock:
+            _recent_requests.append({"path": path, "status": status, "target": target})
+            if len(_recent_requests) > 50:
+                _recent_requests.pop(0)
         return warnings
 
 FRONTEND: Optional[int] = None
