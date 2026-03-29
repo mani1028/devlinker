@@ -23,23 +23,33 @@ _recent_requests = []
 _recent_lock = threading.Lock()
 
 class RequestInspector:
-    def analyze(self, path, status, target):
+    def analyze(self, path, status, target, method=None, response_text=None):
         warnings = []
-        # 1. Missing /api prefix
-        if not path.startswith("/api") and target == "backend":
-            issue = "Possible missing '/api' prefix"
-            state.add(issue, level="MEDIUM", category="routing")
-            warnings.append(issue)
-        # 2. 404 detection
+        # Ignore static files and paths
+        static_exts = [".js", ".css", ".ico", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2", ".ttf", ".map"]
+        IGNORE_PATHS = ["/@vite", "/assets", "/favicon.ico", "/src", "/node_modules"]
+        if any(path.endswith(ext) for ext in static_exts):
+            return warnings
+        if any(path.startswith(p) for p in IGNORE_PATHS):
+            return warnings
+        # Only warn for missing /api prefix if status is 404, method is POST/PUT/DELETE, and not static/ignored
+        if status == 404 and method and method.upper() in ["POST", "PUT", "DELETE"]:
+            if not path.startswith("/api"):
+                # Optionally, check response_text for "Not Found"
+                if response_text is None or "not found" in response_text.lower():
+                    issue = f"Possible missing '/api' prefix on {path} [{method}]"
+                    if state.add(issue, level="MEDIUM", category="routing"):
+                        warnings.append(issue)
+        # 2. 404 detection (general)
         if status == 404:
-            issue = "Route not found → check backend route"
-            state.add(issue, level="HIGH", category="routing")
-            warnings.append(issue)
+            issue = f"Route not found → check backend route: {path}"
+            if state.add(issue, level="HIGH", category="routing"):
+                warnings.append(issue)
         # 3. Upstream failure
         if status == 502:
-            issue = "Backend unreachable"
-            state.add(issue, level="HIGH", category="network")
-            warnings.append(issue)
+            issue = f"Backend unreachable: {path}"
+            if state.add(issue, level="HIGH", category="network"):
+                warnings.append(issue)
         # Log request for inspector
         with _recent_lock:
             _recent_requests.append({"path": path, "status": status, "target": target})
@@ -142,12 +152,15 @@ async def _forward_http(request: Request) -> Response:
     if target_port is None:
         if request.url.path.startswith("/api"):
             status = 503
-            warnings = inspector.analyze(request.url.path, status, "backend")
+            warnings = inspector.analyze(request.url.path, status, "backend", method=request.method)
             for w in warnings:
-                print_warning(w)
+                if "/api" in w:
+                    print_warning(f"API routing issue detected\n👉 {request.url.path} returned 404\n👉 Try: /api{request.url.path}")
+                else:
+                    print_warning(w)
             return PlainTextResponse("Backend is not configured.", status_code=status)
         status = 503
-        warnings = inspector.analyze(request.url.path, status, "frontend")
+        warnings = inspector.analyze(request.url.path, status, "frontend", method=request.method)
         for w in warnings:
             print_warning(w)
         return PlainTextResponse("Frontend is not configured.", status_code=status)
@@ -169,7 +182,7 @@ async def _forward_http(request: Request) -> Response:
         )
     except httpx.RequestError as exc:
         status = 502
-        warnings = inspector.analyze(request.url.path, status, "backend")
+        warnings = inspector.analyze(request.url.path, status, "backend", method=request.method)
         for w in warnings:
             print_warning(w)
         ai_suggestions = ai.analyze_failure(str(exc))
@@ -178,9 +191,18 @@ async def _forward_http(request: Request) -> Response:
         return PlainTextResponse(f"Upstream unavailable: {exc}", status_code=status)
 
     # Analyze response for warnings and fixes
-    warnings = inspector.analyze(request.url.path, upstream.status_code, "backend")
+    warnings = inspector.analyze(
+        request.url.path,
+        upstream.status_code,
+        "backend",
+        method=request.method,
+        response_text=upstream.text
+    )
     for w in warnings:
-        print_warning(w)
+        if "/api" in w:
+            print_warning(f"API routing issue detected\n👉 {request.url.path} returned 404\n👉 Try: /api{request.url.path}")
+        else:
+            print_warning(w)
     ai_suggestions = ai.analyze_failure(str(upstream.text))
     for s in ai_suggestions:
         print_fix(s)

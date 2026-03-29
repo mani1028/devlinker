@@ -7,52 +7,60 @@ class DetectionState:
         self.categories = {}
 
     def add(self, issue, level="MEDIUM", category="general"):
-        self.issues.append(issue)
-        self.counts[issue] = self.counts.get(issue, 0) + 1
-        self.levels[issue] = level
-        self.categories.setdefault(category, []).append(issue)
+        key = issue.strip().lower()
+        if key in self.counts:
+            self.counts[key] += 1
+            return False  # already shown
+        else:
+            self.counts[key] = 1
+            self.issues.append({
+                "issue": issue,
+                "level": level,
+                "category": category
+            })
+            return True  # first time
+
+    def get_count(self, issue):
+        key = issue.strip().lower()
+        return self.counts.get(key, 0)
 
     def should_print(self, issue):
-        return self.counts.get(issue, 0) == 1
+        key = issue.strip().lower()
+        return self.counts.get(key, 0) == 1
 
     def get_issues(self):
-        return [(issue, self.levels.get(issue, "MEDIUM"), self.counts[issue], self._get_category(issue)) for issue in self.issues]
+        return [
+            (i["issue"], i["level"], self.get_count(i["issue"]), i["category"])
+            for i in self.issues
+        ]
 
     def summary(self):
         summary = {}
-        for issue in self.issues:
-            level = self.levels.get(issue, "MEDIUM")
-            summary.setdefault(level, set()).add(issue)
+        for i in self.issues:
+            level = i["level"]
+            summary.setdefault(level, set()).add(i["issue"])
         return summary
 
     def _get_category(self, issue):
-        for cat, issues in self.categories.items():
-            if issue in issues:
-                return cat
+        for i in self.issues:
+            if i["issue"] == issue:
+                return i["category"]
         return "general"
 
     def report(self):
         print("\n🩺 DevLinker Doctor Report\n────────────────────────")
         # Group by category
-        for category, issues in self.categories.items():
-            if not issues:
-                continue
-            if category == "network":
-                print("\n🌐 Network Issues")
-            elif category == "routing":
-                print("\n🔀 Routing Issues")
-            elif category == "cors":
-                print("\n🔐 CORS Issues")
+        for i in self.issues:
+            issue = i["issue"]
+            level = i["level"]
+            category = i["category"]
+            count = self.get_count(issue)
+            if level == "HIGH":
+                print(f"❌ {issue} (x{count})")
+            elif level == "MEDIUM":
+                print(f"⚠️  {issue} (x{count})")
             else:
-                print(f"\n{category.title()} Issues")
-            for issue in set(issues):
-                level = self.levels.get(issue, "MEDIUM")
-                if level == "HIGH":
-                    print(f"❌ {issue}")
-                elif level == "MEDIUM":
-                    print(f"⚠️  {issue}")
-                else:
-                    print(f"💡 {issue}")
+                print(f"💡 {issue} (x{count})")
 
 # Singleton instance
 state = DetectionState()

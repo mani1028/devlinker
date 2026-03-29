@@ -1,3 +1,19 @@
+def stop_tunnel():
+    """Stop all active tunnels (Cloudflare/ngrok)."""
+    # Stop ngrok tunnels
+    try:
+        for tunnel in ngrok.get_tunnels():
+            ngrok.disconnect(tunnel.public_url)
+    except Exception:
+        pass
+    # Stop cloudflared processes
+    global _CLOUDFLARED_PROCESSES
+    for proc in _CLOUDFLARED_PROCESSES:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    _CLOUDFLARED_PROCESSES.clear()
 from __future__ import annotations
 
 import re
