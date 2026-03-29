@@ -23,6 +23,26 @@ jobs:
       - name: Install build
         run: pip install build
 
+      - name: Validate tag matches package version
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          print(data["project"]["version"])
+          PY
+          )
+
+          echo "Tag version: ${TAG_VERSION}"
+          echo "Package version: ${PKG_VERSION}"
+
+          if [ "${TAG_VERSION}" != "${PKG_VERSION}" ]; then
+            echo "ERROR: Tag version and pyproject version differ."
+            exit 1
+          fi
+
       - name: Build package
         run: python -m build
 
