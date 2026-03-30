@@ -142,12 +142,17 @@ def _build_target_ws_url(port: int, path: str, query: str) -> str:
 
 
 async def _forward_http(request: Request) -> Response:
-    # Serve instant loader for local/LAN users unless X-DevLinker-Instant header is present
+    # Serve instant loader only for localhost HTML document navigations.
     client_ip = request.client.host if request.client else None
-    def is_local_network(ip):
+    host_header = request.headers.get("host", "").lower()
+
+    def is_localhost_ip(ip):
         if not ip:
             return False
-        if ip.startswith("127.") or ip == "localhost" or ip == "::1":
+        return ip.startswith("127.") or ip == "localhost" or ip == "::1"
+
+    def is_lan_ip(ip):
+        if not ip:
             return False
         if ip.startswith("192.168.") or ip.startswith("10."):
             return True
@@ -158,9 +163,46 @@ async def _forward_http(request: Request) -> Response:
             except Exception:
                 return False
         return False
-    is_local = is_local_network(client_ip)
+
+    def classify_mode(host: str, ip: str | None) -> str:
+        host_only = host.split(":", 1)[0] if host else ""
+        if host_only in ("localhost", "127.0.0.1", "::1"):
+            return "localhost"
+        if host_only.startswith("192.168.") or host_only.startswith("10."):
+            return "lan"
+        if host_only.startswith("172."):
+            try:
+                second = int(host_only.split(".")[1])
+                if 16 <= second <= 31:
+                    return "lan"
+            except Exception:
+                pass
+        if host_only and host_only not in ("", "0.0.0.0"):
+            return "public"
+        if is_localhost_ip(ip):
+            return "localhost"
+        if is_lan_ip(ip):
+            return "lan"
+        return "public" if ip else "unknown"
+
+    mode = classify_mode(host_header, client_ip)
+    is_localhost = mode == "localhost"
+    is_lan = mode == "lan"
+    is_public = mode == "public"
     is_instant = request.headers.get("x-devlinker-instant") == "1"
-    if is_local and not is_instant and request.method == "GET":
+    accept_header = request.headers.get("accept", "")
+    sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
+    is_html_request = "text/html" in accept_header.lower()
+    is_document_navigation = sec_fetch_dest in ("", "document")
+    is_api_path = request.url.path == "/api" or request.url.path.startswith("/api/")
+    if (
+        is_localhost
+        and not is_instant
+        and request.method == "GET"
+        and is_html_request
+        and is_document_navigation
+        and not is_api_path
+    ):
         import os
         loader_path = os.path.join(os.path.dirname(__file__), "devlinker_loader_instant.html")
         with open(loader_path, encoding="utf-8") as f:
@@ -231,13 +273,13 @@ async def _forward_http(request: Request) -> Response:
     for s in ai_suggestions:
         print_fix(s)
 
-    # Only inject loader for HTML responses, not localhost/loopback, but DO inject for LAN/WiFi clients
+    # Inject loader overlay only for LAN/WiFi/public HTML responses.
     headers = _filter_response_headers(dict(upstream.headers))
     content_type = headers.get("content-type", "")
     is_html = "text/html" in content_type
-    is_public = client_ip and not is_local and (not client_ip.startswith("127.") and client_ip != "localhost" and client_ip != "::1")
     content = upstream.content
-    if is_html and (is_local or is_public):
+    # Only inject loader if NOT an instant loader background fetch
+    if is_html and (is_lan or is_public) and not is_instant:
         try:
             html = content.decode(upstream.encoding or "utf-8", errors="replace")
             # Only inject if </body> exists

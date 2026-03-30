@@ -1,34 +1,57 @@
-<!-- DevLinker Instant Loader for Local/LAN Users -->
+<!-- DevLinker Instant Loader for Local/WLAN Users -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Loading...</title>
+  <title>DevLinker Loading</title>
   <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0b1220;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #e2e8f0;
+    }
     #devlinker-loader-min {
       position: fixed;
       inset: 0;
       z-index: 99999;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .devlinker-center {
       display: flex;
       flex-direction: column;
-      justify-content: center;
       align-items: center;
-      background: rgba(255,255,255,0.92);
-      min-height: 100vh;
-      font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+      gap: 10px;
     }
-    .devlinker-spinner-min {
-      width: 38px;
-      height: 38px;
-      border: 4px solid #e0e7ef;
-      border-top: 4px solid #2563eb;
+    .devlinker-logo {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      margin-bottom: 4px;
+      color: #f8fafc;
+    }
+    .devlinker-spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid rgba(148, 163, 184, 0.25);
+      border-top: 4px solid #22d3ee;
       border-radius: 50%;
-      animation: spin 1s linear infinite;
-      margin-bottom: 2.5rem;
+      animation: devlinker-spin 1s linear infinite;
     }
-    @keyframes spin {
-      100% { transform: rotate(360deg); }
+    .devlinker-text {
+      font-size: 1rem;
+      color: #cbd5e1;
+      font-weight: 600;
+    }
+    .devlinker-health {
+      font-size: 0.84rem;
+      color: #94a3b8;
+      opacity: 0.9;
     }
     .devlinker-powered {
       position: fixed;
@@ -36,49 +59,35 @@
       left: 0;
       width: 100vw;
       text-align: center;
-      color: #2563eb;
-      font-size: 1.08rem;
+      color: #94a3b8;
+      font-size: 0.92rem;
       font-weight: 500;
-      opacity: 0.85;
-      letter-spacing: 0.01em;
+      opacity: 0.9;
       pointer-events: none;
       user-select: none;
-      z-index: 100000;
     }
-    .devlinker-loading-msg {
-      font-size: 1.18rem;
-      color: #222;
-      font-weight: 500;
-      margin-top: -1.5rem;
-      margin-bottom: 2.2rem;
-      letter-spacing: 0.01em;
-      text-align: center;
-      opacity: 0.92;
-    }
-    .devlinker-3wev {
-      font-size: 1.05rem;
-      color: #2563eb;
-      font-weight: 600;
-      margin-top: 0.5rem;
-      letter-spacing: 0.04em;
-      text-align: center;
-      opacity: 0.93;
+    @keyframes devlinker-spin {
+      to { transform: rotate(360deg); }
     }
   </style>
 </head>
 <body>
   <div id="devlinker-loader-min">
-    <div class="devlinker-spinner-min"></div>
-    <div class="devlinker-loading-msg">Loading your app…</div>
+    <div class="devlinker-center">
+      <div class="devlinker-logo">DevLinker</div>
+      <div class="devlinker-spinner"></div>
+      <div class="devlinker-text">Loading your app...</div>
+      <div class="devlinker-health">Frontend connected • Backend connected</div>
+    </div>
   </div>
   <div class="devlinker-powered">Powered by DevLinker</div>
   <script>
-    // Fetch the real page and replace the loader, but show loader for at least 1s
+    // Fetch the real page and replace the loader with a short minimum display for smoothness.
     (async function() {
-      const minTime = 1000;
+      const minTime = 500;
       const start = Date.now();
       try {
-        const resp = await fetch(window.location.href, { headers: { 'X-DevLinker-Instant': '1' } });
+        const resp = await fetch(window.location.href, { headers: { "X-DevLinker-Instant": "1" } });
         const html = await resp.text();
         const elapsed = Date.now() - start;
         const delay = Math.max(0, minTime - elapsed);
@@ -89,9 +98,9 @@
         }, delay);
       } catch (e) {
         // Show error if fetch fails
-        var loader = document.getElementById('devlinker-loader-min');
+        var loader = document.getElementById("devlinker-loader-min");
         if (loader) {
-          loader.innerHTML += '<div style="color:#b91c1c;font-size:1.1rem;margin-top:1.5rem;">Failed to load app. Please check your connection.</div>';
+          loader.innerHTML += '<div style="color:#b91c1c;font-size:1.05rem;margin-top:1.5rem;">Failed to load app. Please check your connection.</div>';
         }
       }
     })();

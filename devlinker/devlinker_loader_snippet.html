@@ -1,122 +1,162 @@
-<!-- DevLinker Next-Level Loader Overlay -->
+<!-- DevLinker Loader Overlay -->
 <style>
   #devlinker-loader {
     position: fixed;
     z-index: 99999;
     inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: grid;
+    place-items: center;
     min-height: 100vh;
-    background: linear-gradient(135deg, #f1f5f9 0%, #e0e7ff 100%);
-    font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+    background:
+      radial-gradient(700px 360px at 18% 12%, rgba(34, 211, 238, 0.18), transparent 60%),
+      radial-gradient(520px 280px at 82% 18%, rgba(59, 130, 246, 0.16), transparent 58%),
+      #0f172a;
+    font-family: "Segoe UI", Arial, sans-serif;
     transition: opacity 0.4s cubic-bezier(.4,0,.2,1);
+    color: #e2e8f0;
   }
-  .devlinker-loader-card {
-    background: #fff;
-    border-radius: 20px;
-    box-shadow: 0 15px 40px rgba(0,0,0,0.08);
-    padding: 40px 30px;
-    min-width: 260px;
-    max-width: 94vw;
-    text-align: center;
-    border: 1.5px solid #e0e7ef;
-    position: relative;
-    width: 100%;
-    max-width: 350px;
+  .devlinker-panel {
+    width: min(640px, 92vw);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.75);
+    box-shadow: 0 24px 70px rgba(2, 6, 23, 0.55);
+    backdrop-filter: blur(8px);
+    padding: 24px 22px;
   }
-  .devlinker-logo {
-    font-size: 2.1rem;
-    font-weight: 600;
-    color: #2563eb;
-    margin-bottom: 20px;
-    letter-spacing: -1.2px;
-    user-select: none;
+  .devlinker-top {
+    font-weight: 700;
+    font-size: 1.2rem;
+    color: #f8fafc;
+    margin-bottom: 12px;
   }
-  .devlinker-spin {
-    margin: 20px auto;
-    width: 40px;
-    height: 40px;
+  .devlinker-title {
+    font-size: 1.15rem;
+    font-weight: 650;
+    margin-bottom: 8px;
+    color: #f8fafc;
+  }
+  .devlinker-stage {
+    min-height: 1.45rem;
+    font-size: 0.98rem;
+    color: #a5b4fc;
+    margin-bottom: 14px;
+  }
+  .devlinker-center {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
+    gap: 10px;
+    padding: 14px 0 16px;
   }
   .devlinker-spinner {
-    width: 40px;
-    height: 40px;
+    width: 52px;
+    height: 52px;
+    border: 4px solid rgba(148, 163, 184, 0.25);
+    border-top: 4px solid #22d3ee;
+    border-right: 4px solid #60a5fa;
     border-radius: 50%;
-    border: 4px solid #e0e7ef;
-    border-top: 4px solid #3b82f6;
-    animation: devlinker-spin 1.1s linear infinite;
+    animation: devlinker-spin 1s linear infinite;
+  }
+  .devlinker-text {
+    font-size: 1rem;
+    color: #cbd5e1;
+    font-weight: 600;
+  }
+  .devlinker-divider {
+    height: 1px;
+    width: 100%;
+    background: rgba(148, 163, 184, 0.22);
+    margin: 8px 0 14px;
+  }
+  .devlinker-info {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    color: #cbd5e1;
+    font-size: 0.92rem;
+  }
+  .devlinker-tip {
+    color: #cbd5e1;
+    line-height: 1.4;
+  }
+  .devlinker-upgrade {
+    color: #93c5fd;
+    text-decoration: none;
+    font-weight: 600;
+    display: inline-block;
+    margin-top: 2px;
+  }
+  .devlinker-upgrade:hover {
+    color: #bfdbfe;
+  }
+  .devlinker-powered {
+    margin-top: 14px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.9rem;
+    font-weight: 500;
+    opacity: 0.95;
   }
   @keyframes devlinker-spin {
-    100% { transform: rotate(360deg); }
+    to { transform: rotate(360deg); }
   }
-  .devlinker-brand {
-    font-size: 1.13rem;
-    color: #222;
-    font-weight: 600;
-    margin-bottom: 0.2rem;
-    letter-spacing: -0.5px;
-  }
-  .devlinker-desc {
-    font-size: 1.01rem;
-    color: #555;
-    margin-bottom: 0.7rem;
-  }
-  .devlinker-upgrade-btn {
-    margin-top: 15px;
-    background: #2563eb;
-    color: #fff;
-    border: none;
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    box-shadow: 0 2px 8px rgba(37,99,235,0.08);
-    transition: background 0.2s, box-shadow 0.2s;
-    outline: none;
-    display: inline-block;
-  }
-  .devlinker-upgrade-btn:hover {
-    background: #1d4ed8;
-    box-shadow: 0 4px 16px rgba(37,99,235,0.13);
-  }
-  @media (max-width: 600px) {
-    .devlinker-loader-card {
-      min-width: 0;
-      padding: 1.2rem 0.5rem 1.1rem 0.5rem;
-      border-radius: 12px;
+  @media (max-width: 640px) {
+    .devlinker-panel {
+      padding: 18px 16px;
     }
-    .devlinker-logo {
-      font-size: 1.3rem;
-    }
-    .devlinker-upgrade-btn {
-      font-size: 0.97rem;
-      padding: 8px 12px;
+    .devlinker-title {
+      font-size: 1.04rem;
     }
   }
 </style>
 <div id="devlinker-loader">
-  <div class="devlinker-loader-card">
-    <div class="devlinker-logo">∞ DevLinker</div>
-    <div class="devlinker-spin"><div class="devlinker-spinner"></div></div>
-    <div class="devlinker-brand">Loading your app...</div>
-    <div class="devlinker-desc">Powered by <span style="color:#2563eb;font-weight:700;">DevLinker</span> 🚀</div>
-    <a href="https://devlinker.app" target="_blank" rel="noopener">
-      <button class="devlinker-upgrade-btn">Upgrade for custom domain</button>
-    </a>
+  <div class="devlinker-panel">
+    <div class="devlinker-top">DevLinker</div>
+    <div class="devlinker-title">Connecting your app...</div>
+    <div class="devlinker-stage" id="devlinker-stage">Establishing secure tunnel...</div>
+    <div class="devlinker-center">
+      <div class="devlinker-spinner"></div>
+      <div class="devlinker-text">Preparing full experience</div>
+    </div>
+    <div class="devlinker-divider"></div>
+    <div class="devlinker-info">
+      <div class="devlinker-tip">Tip: Share your app instantly with one link. No CORS issues, no port confusion.</div>
+      <div class="devlinker-tip">Go Pro: custom domains, faster sharing, and no branding.</div>
+      <a class="devlinker-upgrade" href="https://devlinker.app" target="_blank" rel="noopener">Explore Pro at devlinker.app</a>
+    </div>
+    <div class="devlinker-powered">Powered by DevLinker</div>
   </div>
 </div>
 <script>
+const stageMessages = [
+  "Establishing secure tunnel...",
+  "Routing frontend assets...",
+  "Connecting backend services...",
+  "Optimizing connection...",
+  "Almost ready..."
+];
+let stageIndex = 0;
+const stageElement = document.getElementById("devlinker-stage");
+const stageTimer = setInterval(() => {
+  if (!stageElement) return;
+  stageIndex = (stageIndex + 1) % stageMessages.length;
+  stageElement.textContent = stageMessages[stageIndex];
+}, 1000);
+
 const start = Date.now();
+const MIN_TIME = 800;
+const MAX_TIME = 5000;
+let hidden = false;
+
 function hideLoader() {
-  const minTime = 1000; // 1 sec branding (increased from 0.8s)
+  if (hidden) return;
+  hidden = true;
+  clearInterval(stageTimer);
   const elapsed = Date.now() - start;
-  const delay = Math.max(0, minTime - elapsed);
+  const delay = Math.max(0, MIN_TIME - elapsed);
+  const el = document.getElementById("devlinker-loader");
   setTimeout(() => {
-    const el = document.getElementById("devlinker-loader");
     if (el) {
       el.style.opacity = "0";
       setTimeout(() => el.remove(), 400);
@@ -124,5 +164,5 @@ function hideLoader() {
   }, delay);
 }
 window.addEventListener("load", hideLoader);
-setTimeout(hideLoader, 7000); // max 7s (increased from 5s)
+setTimeout(hideLoader, MAX_TIME);
 </script>
