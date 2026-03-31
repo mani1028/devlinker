@@ -17,9 +17,21 @@ Dev Linker runs frontend and backend dev servers, proxies both through a single 
 - 🧪 **Runtime Smoke Test:** Built-in test for end-to-end proxy validation.
 - 🛠️ **Extensible:** Modular architecture for future SaaS, dashboard, and team features.
 
+## Support DevLinker
+
+If DevLinker helps you ship faster, consider supporting the project:
+
+> 💖 Support DevLinker
+> [![UPI](https://img.shields.io/badge/UPI-devlinker%40upi-22c55e?style=for-the-badge)](upi://pay?pa=devlinker@upi&pn=DevLinker&cu=INR&tn=Support%20DevLinker%20Project%20🚀)
+> [![Donate](https://img.shields.io/badge/Support-Scan%20or%20Pay-0ea5e9?style=for-the-badge)](upi://pay?pa=devlinker@upi&pn=DevLinker&cu=INR&tn=Support%20DevLinker%20Project%20🚀)
+
+- 💖 UPI: devlinker@upi
+- 🔗 UPI link: upi://pay?pa=devlinker@upi&pn=DevLinker&cu=INR&tn=Support%20DevLinker%20Project%20🚀
+
 ## CLI Commands & Options
 
 - `devlinker` — Start proxy (local only, fast)
+- `devlinker support` — Show UPI support QR code in terminal
 - `devlinker --url` — Start with public tunnel (Cloudflare/ngrok)
 - `devlinker share` — Enable public tunnel at runtime (no restart)
 - `devlinker unshare` — Disable public tunnel at runtime

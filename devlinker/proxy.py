@@ -21,6 +21,21 @@ from devlinker.detection_state import state
 import threading
 _recent_requests = []
 _recent_lock = threading.Lock()
+_printed_fixes = set()
+
+
+def _format_request_context(path: str, method: str | None, status: int, target: str) -> str:
+    safe_method = method.upper() if method else "UNKNOWN"
+    return f"{safe_method} {path} -> {target} ({status})"
+
+
+def _print_fix_once(message: str) -> None:
+    key = message.strip().lower()
+    if key in _printed_fixes:
+        return
+    _printed_fixes.add(key)
+    from devlinker.logger import print_fix
+    print_fix(message)
 
 class RequestInspector:
     def analyze(self, path, status, target, method=None, response_text=None):
@@ -71,6 +86,12 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _apply_security_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    # Explicitly allow camera/mic for the current origin.
+    headers["Permissions-Policy"] = "camera=(self), microphone=(self)"
+    return headers
 
 
 @app.on_event("startup")
@@ -185,10 +206,20 @@ async def _forward_http(request: Request) -> Response:
             return "lan"
         return "public" if ip else "unknown"
 
+    def _is_secure_request(req: Request, host: str) -> bool:
+        if req.url.scheme == "https":
+            return True
+        forwarded_proto = req.headers.get("x-forwarded-proto", "").lower()
+        if "https" in forwarded_proto:
+            return True
+        host_only = host.split(":", 1)[0] if host else ""
+        return host_only in ("localhost", "127.0.0.1", "::1")
+
     mode = classify_mode(host_header, client_ip)
     is_localhost = mode == "localhost"
     is_lan = mode == "lan"
     is_public = mode == "public"
+    is_secure = _is_secure_request(request, host_header)
     is_instant = request.headers.get("x-devlinker-instant") == "1"
     accept_header = request.headers.get("accept", "")
     sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
@@ -207,8 +238,13 @@ async def _forward_http(request: Request) -> Response:
         loader_path = os.path.join(os.path.dirname(__file__), "devlinker_loader_instant.html")
         with open(loader_path, encoding="utf-8") as f:
             loader_html = f.read()
-        return Response(content=loader_html, status_code=200, media_type="text/html")
-    from devlinker.logger import print_warning, print_fix
+        return Response(
+            content=loader_html,
+            status_code=200,
+            media_type="text/html",
+            headers=_apply_security_headers({}),
+        )
+    from devlinker.logger import print_warning
     from devlinker.detector_ai import DevLinkerAI
 
     inspector = RequestInspector()
@@ -219,16 +255,21 @@ async def _forward_http(request: Request) -> Response:
         if request.url.path.startswith("/api"):
             status = 503
             warnings = inspector.analyze(request.url.path, status, "backend", method=request.method)
+            context = _format_request_context(request.url.path, request.method, status, "backend")
             for w in warnings:
                 if "/api" in w:
-                    print_warning(f"API routing issue detected\n👉 {request.url.path} returned 404\n👉 Try: /api{request.url.path}")
+                    print_warning(
+                        f"API routing issue detected | {context}\n"
+                        f"Fix: Try /api{request.url.path}"
+                    )
                 else:
-                    print_warning(w)
+                    print_warning(f"{w} | {context}")
             return PlainTextResponse("Backend is not configured.", status_code=status)
         status = 503
         warnings = inspector.analyze(request.url.path, status, "frontend", method=request.method)
+        context = _format_request_context(request.url.path, request.method, status, "frontend")
         for w in warnings:
-            print_warning(w)
+            print_warning(f"{w} | {context}")
         return PlainTextResponse("Frontend is not configured.", status_code=status)
 
     if HTTP_CLIENT is None:
@@ -249,11 +290,12 @@ async def _forward_http(request: Request) -> Response:
     except httpx.RequestError as exc:
         status = 502
         warnings = inspector.analyze(request.url.path, status, "backend", method=request.method)
+        context = _format_request_context(request.url.path, request.method, status, "backend")
         for w in warnings:
-            print_warning(w)
+            print_warning(f"{w} | {context}")
         ai_suggestions = ai.analyze_failure(str(exc))
         for s in ai_suggestions:
-            print_fix(s)
+            _print_fix_once(f"{s} | {context}")
         return PlainTextResponse(f"Upstream unavailable: {exc}", status_code=status)
 
     # Analyze response for warnings and fixes
@@ -264,17 +306,21 @@ async def _forward_http(request: Request) -> Response:
         method=request.method,
         response_text=upstream.text
     )
+    context = _format_request_context(request.url.path, request.method, upstream.status_code, "backend")
     for w in warnings:
         if "/api" in w:
-            print_warning(f"API routing issue detected\n👉 {request.url.path} returned 404\n👉 Try: /api{request.url.path}")
+            print_warning(
+                f"API routing issue detected | {context}\n"
+                f"Fix: Try /api{request.url.path}"
+            )
         else:
-            print_warning(w)
+            print_warning(f"{w} | {context}")
     ai_suggestions = ai.analyze_failure(str(upstream.text))
     for s in ai_suggestions:
-        print_fix(s)
+        _print_fix_once(f"{s} | {context}")
 
     # Inject loader overlay only for LAN/WiFi/public HTML responses.
-    headers = _filter_response_headers(dict(upstream.headers))
+    headers = _apply_security_headers(_filter_response_headers(dict(upstream.headers)))
     content_type = headers.get("content-type", "")
     is_html = "text/html" in content_type
     content = upstream.content
@@ -288,7 +334,15 @@ async def _forward_http(request: Request) -> Response:
                 loader_file = "devlinker_loader_snippet.html"
                 with open(os.path.join(os.path.dirname(__file__), loader_file), encoding="utf-8") as f:
                     loader = f.read()
-                html = html.replace("</body>", loader + "</body>")
+                context_script = (
+                    "<script>window.__DEVLINKER_CAMERA_CONTEXT__="
+                    + "{"
+                    + f'"mode":"{mode}",'
+                    + f'"secure":{str(is_secure).lower()}'
+                    + "}"
+                    + ";</script>"
+                )
+                html = html.replace("</body>", context_script + loader + "</body>")
                 content = html.encode(upstream.encoding or "utf-8")
         except Exception:
             pass

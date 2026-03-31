@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import time
+import webbrowser
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import click
@@ -18,6 +19,32 @@ from .share import share, unshare
 from .config import load_config
 from .inspect import inspect
 from .monitor import monitor
+
+SUPPORT_UPI_ID = "devlinker@upi"
+SUPPORT_UPI_LINK = "upi://pay?pa=devlinker@upi&pn=DevLinker&cu=INR&tn=Support%20DevLinker%20Project%20🚀"
+SUPPORT_QR_FALLBACK = [
+    "#######.......#######",
+    "#.....#.......#.....#",
+    "#.###.#.......#.###.#",
+    "#.###.#.......#.###.#",
+    "#.###.#.......#.###.#",
+    "#.....#.......#.....#",
+    "#######.......#######",
+    "##..##.##..##.##..##.",
+    ".##..##..##..##..##..",
+    "###...###...###...###",
+    "..###....###....###..",
+    "###..#.###..#.###..#.",
+    "#..###.#..###.#..###.",
+    "....#......#......#..",
+    "#######..............",
+    "#.....#..............",
+    "#.###.#..............",
+    "#.###.#..............",
+    "#.###.#..............",
+    "#.....#..............",
+    "#######..............",
+]
 
 
 def _is_port_in_use(port: int) -> bool:
@@ -83,6 +110,35 @@ def _print_summary(
         click.secho("Tip: Press Ctrl+Click to open link", fg="magenta")
     else:
         click.secho("  Public → Disabled (use --url)", fg="yellow")
+    click.secho("\n💡 Enjoying DevLinker? Support the project ❤️", fg="magenta")
+    click.secho(f"UPI: {SUPPORT_UPI_ID}", fg="yellow")
+    click.secho("Run: devlinker support (shows QR)", fg="yellow")
+
+
+def _print_support_qr(open_link: bool) -> None:
+    click.secho("\n💖 Support DevLinker 🚀", fg="magenta", bold=True)
+    click.secho("Help keep the tool free and improving!", fg="white")
+    click.secho(f"\nUPI: {SUPPORT_UPI_ID}", fg="yellow")
+    click.secho(f"Link: {SUPPORT_UPI_LINK}\n", fg="cyan")
+
+    try:
+        import qrcode
+    except ImportError:
+        click.secho("ASCII QR (fallback):", fg="yellow")
+        for row in SUPPORT_QR_FALLBACK:
+            click.echo(row.replace("#", "##").replace(".", "  "))
+        click.secho("\nInstall full QR support: pip install qrcode[pil]", fg="yellow")
+        if open_link:
+            webbrowser.open(SUPPORT_UPI_LINK)
+        return
+
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(SUPPORT_UPI_LINK)
+    qr.make(fit=True)
+    qr.print_ascii(invert=True)
+
+    if open_link:
+        webbrowser.open(SUPPORT_UPI_LINK)
 
 
 def _get_local_ip() -> str | None:
@@ -117,7 +173,7 @@ def _wait_for_readiness(
     return False
 
 
-@click.command()
+@click.group(invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="devlinker")
 @click.option("--frontend", type=int, default=None, help="Override detected frontend port.")
 @click.option(
@@ -151,8 +207,36 @@ def _wait_for_readiness(
     help="Show WLAN sharing URL for devices on the same network.",
 )
 @click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging.")
+@click.pass_context
+def main(
+    ctx: click.Context,
+    frontend: int | None,
+    backend_port_override: int | None,
+    proxy_port: int,
+    auto_start_docker: bool,
+    url: bool,
+    no_tunnel: bool,
+    interactive_backend: bool,
+    lan_enabled: bool,
+    debug: bool,
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
 
-def cli(
+    _run_proxy(
+        frontend,
+        backend_port_override,
+        proxy_port,
+        auto_start_docker,
+        url,
+        no_tunnel,
+        interactive_backend,
+        lan_enabled,
+        debug,
+    )
+
+
+def _run_proxy(
     frontend: int | None,
     backend_port_override: int | None,
     proxy_port: int,
@@ -236,6 +320,11 @@ def cli(
             wlan_url = f"http://{local_ip}:{proxy_port}"
             click.secho(f"[OK] WLAN URL: {wlan_url}", fg="green")
             click.secho("[INFO] Share WLAN link with teammates on same WiFi/LAN.", fg="blue")
+            click.secho(
+                "[WARN] Camera/mic may be blocked on WLAN HTTP links by browser security."
+                " Use localhost or --url for HTTPS.",
+                fg="yellow",
+            )
         else:
             click.secho("[WARN] WLAN URL unavailable (no active LAN interface detected).", fg="yellow")
             click.secho("[INFO] If LAN sharing fails, allow proxy port in firewall and use same network.", fg="yellow")
@@ -286,19 +375,25 @@ def cli(
         click.secho("\n[INFO] Dev Linker stopped.", fg="yellow")
 
 
-@click.group()
-def main():
-    pass
+@click.command()
+@click.option(
+    "--open",
+    "open_link",
+    is_flag=True,
+    help="Open the UPI link in your browser after rendering the QR.",
+)
+def support(open_link: bool) -> None:
+    _print_support_qr(open_link)
 
 
 
-main.add_command(cli)
 main.add_command(doctor)
 main.add_command(fix)
 main.add_command(share)
 main.add_command(unshare)
 main.add_command(inspect)
 main.add_command(monitor)
+main.add_command(support)
 
 if __name__ == "__main__":
     main()

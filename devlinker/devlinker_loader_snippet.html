@@ -98,6 +98,33 @@
     font-weight: 500;
     opacity: 0.95;
   }
+  .devlinker-support {
+    color: #cbd5e1;
+    line-height: 1.45;
+  }
+  .devlinker-support a {
+    color: #7dd3fc;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .devlinker-support a:hover {
+    color: #bae6fd;
+    text-decoration: underline;
+  }
+  .devlinker-warning {
+    display: none;
+    margin-top: 12px;
+    border: 1px solid rgba(251, 191, 36, 0.45);
+    background: rgba(120, 53, 15, 0.26);
+    border-radius: 12px;
+    padding: 10px 12px;
+    color: #fde68a;
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+  .devlinker-warning strong {
+    color: #fef3c7;
+  }
   @keyframes devlinker-spin {
     to { transform: rotate(360deg); }
   }
@@ -124,8 +151,12 @@
       <div class="devlinker-tip">Tip: Share your app instantly with one link. No CORS issues, no port confusion.</div>
       <div class="devlinker-tip">Go Pro: custom domains, faster sharing, and no branding.</div>
       <a class="devlinker-upgrade" href="https://devlinker.app" target="_blank" rel="noopener">Explore Pro at devlinker.app</a>
+      <div class="devlinker-support">Support the project ❤️ <a href="upi://pay?pa=devlinker@upi&pn=DevLinker&cu=INR&tn=Support%20DevLinker%20Project%20🚀">devlinker@upi</a></div>
+      <div class="devlinker-warning" id="devlinker-camera-warning">
+        <strong>Camera warning:</strong> camera and microphone are blocked on LAN HTTP URLs by browser policy. Use localhost or run <strong>devlinker --url</strong> for HTTPS sharing.
+      </div>
     </div>
-    <div class="devlinker-powered">Powered by DevLinker</div>
+    <div class="devlinker-powered">Powered by DevLinker 🚀</div>
   </div>
 </div>
 <script>
@@ -148,6 +179,16 @@ const start = Date.now();
 const MIN_TIME = 800;
 const MAX_TIME = 5000;
 let hidden = false;
+
+const cameraContext = window.__DEVLINKER_CAMERA_CONTEXT__ || {};
+const warningElement = document.getElementById("devlinker-camera-warning");
+if (warningElement) {
+  const isLan = cameraContext.mode === "lan";
+  const isSecure = Boolean(cameraContext.secure);
+  if (isLan && !isSecure) {
+    warningElement.style.display = "block";
+  }
+}
 
 function hideLoader() {
   if (hidden) return;
