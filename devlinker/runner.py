@@ -18,8 +18,36 @@ except ImportError:  # pragma: no cover - optional fallback path
 
 from .detector import check_port, is_vite_port
 
+try:
+    from rich.console import Console
+    from rich.prompt import Prompt
+except ImportError:  # pragma: no cover - fallback when rich is unavailable
+    Console = None
+    Prompt = None
+
+_RICH_AVAILABLE = Console is not None
+_CONSOLE = Console() if Console is not None else None
+
 
 def _log(level: str, message: str) -> None:
+    if _CONSOLE:
+        icon_map = {
+            "info": "ℹ",
+            "ok": "✔",
+            "warn": "⚠",
+            "error": "✖",
+        }
+        style_map = {
+            "info": "cyan",
+            "ok": "green",
+            "warn": "yellow",
+            "error": "red",
+        }
+        icon = icon_map.get(level, "ℹ")
+        style = style_map.get(level, "cyan")
+        _CONSOLE.print(f"{icon} {message}", style=style)
+        return
+
     prefix_map = {
         "info": "[INFO]",
         "ok": "[OK]",
@@ -295,14 +323,19 @@ def _choose_backend_candidate(
     docker_candidates: list[tuple[str, int, int]],
     debug: bool = False,
 ) -> tuple[str, int, str | None, int | None]:
-    print("[INFO] Multiple backends detected:")
-    print(f"1. Local (localhost:{local_port})")
+    _log("info", "Multiple backends detected. Choose one:")
+    print(f"  1) Local  (localhost:{local_port})")
     for index, (container_name, host_port, container_port) in enumerate(docker_candidates, start=2):
-        print(f"{index}. Docker: {container_name} (localhost:{host_port} -> {container_port})")
-    print("[INFO] Select backend [default: 1]: ", end="", flush=True)
+        print(f"  {index}) Docker ({container_name}) localhost:{host_port} -> {container_port}")
+    max_opt = len(docker_candidates) + 1
+    prompt_text = f"Select backend (1-{max_opt})"
 
     try:
-        raw = input().strip()
+        if _CONSOLE and Prompt:
+            raw = Prompt.ask(f"{prompt_text} [Enter=1]", default="1")
+        else:
+            print(f"[INFO] {prompt_text} [Enter=1]: ", end="", flush=True)
+            raw = input().strip()
     except EOFError:
         _debug_log(debug, "Interactive prompt unavailable (EOF); using local backend fallback")
         return "local", local_port, None, None
@@ -340,7 +373,7 @@ def _wait_for_port(port: int, retries: int = 5, delay_seconds: float = 1.0, debu
 def detect_backend_port(
     default_port: int = 5000,
     override_port: int | None = None,
-    interactive: bool = False,
+    interactive: bool = True,
     debug: bool = False,
 ) -> int | None:
     started = time.perf_counter()
@@ -363,29 +396,35 @@ def detect_backend_port(
     docker_candidates = get_docker_backend_candidates(default_container_port=default_port, debug=debug)
 
     if local_open and docker_candidates:
-        if interactive and sys.stdin.isatty():
-            source, selected_port, container_name, container_port = _choose_backend_candidate(
+        if interactive:
+            choice_kind, chosen_port, container_name, container_port = _choose_backend_candidate(
                 local_port=default_port,
                 docker_candidates=docker_candidates,
                 debug=debug,
             )
-            if source == "local":
-                _log("ok", f"Backend detected (Local) -> port {selected_port}")
+            if choice_kind == "docker":
+                _log("ok", f"Backend detected (Docker: {container_name}) -> port {chosen_port}")
+                if container_port is not None:
+                    _debug_log(debug, f"Selected Docker container port: {container_port}")
                 _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
-                return selected_port
+                return chosen_port
 
-            if _wait_for_port(selected_port, retries=5, delay_seconds=1.0, debug=debug):
-                _log("ok", f"Backend detected (Docker: {container_name}) -> port {selected_port}")
-                _debug_log(debug, f"Selected Docker container port: {container_port}")
-                _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
-                return selected_port
-            _log("warn", f"Docker mapped port {selected_port} found but backend is not ready yet")
-        else:
-            _log("info", f"Docker candidate also detected: {docker_candidates[0][0]} -> {docker_candidates[0][1]}")
-            _debug_log(debug, "Interactive backend picker disabled or no TTY; using local-first priority")
-            _log("ok", f"Backend detected (Local) -> port {default_port}")
+            _log("ok", f"Backend detected (Local) -> port {chosen_port}")
             _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
-            return default_port
+            return chosen_port
+
+        primary_name, primary_host_port, _primary_container_port = docker_candidates[0]
+        _log(
+            "info",
+            (
+                f"Multiple backends detected; auto-selecting Local (localhost:{default_port}). "
+                f"Docker candidate: {primary_name} -> localhost:{primary_host_port}"
+            ),
+        )
+        _debug_log(debug, "Using local-first priority (interactive selection disabled)")
+        _log("ok", f"Backend detected (Local) -> port {default_port}")
+        _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
+        return default_port
 
     if local_open:
         _log("ok", f"Backend detected (Local) -> port {default_port}")
@@ -508,8 +547,11 @@ def start_servers(
     frontend_path = Path(frontend_dir)
     backend_path = Path(backend_dir)
 
+    frontend_running = any(is_vite_port(port, timeout=0.5) for port in (5173, 5174, 5175, 5176, 5177, 3000, 8080))
+    backend_running = check_port(5000, timeout=0.5)
+
     if frontend_path.exists() and frontend_path.is_dir():
-        if any(is_vite_port(port, timeout=0.5) for port in (5173, 5174, 5175, 5176, 5177, 3000, 8080)):
+        if frontend_running:
             _log("ok", "Frontend already running; skipping launch.")
         else:
             cmd = _frontend_command(frontend_path)
@@ -517,12 +559,16 @@ def start_servers(
             env = os.environ.copy()
             env["ONELINK"] = "1"
             subprocess.Popen(cmd, cwd=frontend_path, env=env)  # noqa: S603
-            _log("ok", "Frontend launch requested.")
+            _log("ok", f"Frontend launch requested: {' '.join(cmd)}")
     else:
-        _log("warn", "frontend/ not found; skipping frontend launch.")
+        if frontend_running:
+            _log("ok", "Frontend already running; skipping launch.")
+        else:
+            _log("warn", "frontend/ not found; skipping frontend launch.")
+            _log("info", "Tip: run your frontend manually (example: npm run dev).")
 
     if backend_path.exists() and backend_path.is_dir():
-        if check_port(5000, timeout=0.5):
+        if backend_running:
             _log("ok", "Backend already running on port 5000; skipping launch.")
             return
 
@@ -568,4 +614,8 @@ def start_servers(
         else:
             _log("warn", "No supported backend runtime detected; skipping backend launch.")
     else:
-        _log("warn", "backend/ not found; skipping backend launch.")
+        if backend_running:
+            _log("ok", "Backend already running on port 5000; skipping launch.")
+        else:
+            _log("warn", "backend/ not found; skipping backend launch.")
+            _log("info", "Tip: run your backend manually (example: python app.py).")

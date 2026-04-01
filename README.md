@@ -1,12 +1,16 @@
 # Dev Linker
 
-Dev Linker runs frontend and backend dev servers, proxies both through a single local port (8000), and creates a single public URL via Cloudflare or ngrok.
+Dev Linker starts your local development stack and routes frontend and backend traffic through one proxy URL, with optional LAN and public sharing.
 
 
 ## Features
 
 - 🚀 **Unified Dev Proxy:** Combines frontend (Vite/React) and backend (FastAPI/Flask/Node/Docker) into a single local and public URL.
 - 🔍 **Auto Detection:** Detects frontend/backend ports, runtime, Docker containers, and Vite servers automatically.
+- 📡 **Debug Request Logger:** Live API traffic lines (method, path, status, latency) only in debug mode.
+- 🧩 **Backend-Only Mode:** If no frontend is detected, DevLinker still runs and forwards all traffic to backend.
+- 🔁 **Auto API URL Sync:** Updates `frontend/.env.local` with `VITE_API_URL=http://localhost:<proxy-port>` using a managed block.
+- 🛡️ **Proxy CORS + Preflight:** Handles common CORS/preflight behavior at the proxy layer, including credential-safe Origin handling.
 - 🧠 **Smart Detection & Doctor:** Real-time request analysis, backend intelligence, log analyzer, and `devlinker doctor` for instant diagnostics.
 - 🛡️ **Auto-Fix Engine:** `devlinker fix` applies safe fixes (like VITE_API_URL) and suggests code changes.
 - 🌍 **Public Sharing:** Share your local dev environment instantly with `--url` (startup) or `devlinker share` (runtime, no restart).
@@ -43,6 +47,7 @@ If DevLinker helps you ship faster, consider supporting the project:
 - `devlinker --no-lan` — Hide WLAN sharing URL
 - `devlinker --interactive-backend` — Prompt to choose backend if multiple found
 - `devlinker --proxy-port 18000` — Use custom proxy port
+- `devlinker --debug` — Enable debug mode (turns on live API request logger)
 - `devlinker --version` — Show version
 
 ## Project Structure
@@ -69,6 +74,12 @@ For local development:
 pip install .
 ```
 
+For editable local development:
+
+```bash
+pip install -e .
+```
+
 After publishing to PyPI:
 
 ```bash
@@ -81,34 +92,47 @@ pip install devlinker
 devlinker
 ```
 
-Typical startup output:
+Direct module run (without installing entrypoint script):
+
+```bash
+python -m devlinker.main
+```
+
+Typical startup output (TTY with Rich available):
 
 ```text
-Dev Linker v1.2.2
+╭─────────────────────────────╮
+│ ♾️  DevLinker v1.4.1        │
+│ Smart Local Dev Environment │
+╰─────────────────────────────╯
 
-[INFO] Mode: Auto (FastAPI async proxy + Docker detection)
-[INFO] Booting local services...
-[INFO] Detecting frontend/backend ports...
-[OK] Frontend -> 5173
-[OK] Backend  -> 5000
+✔ Detecting project...
+⏳ Booting local services...
 
-[OK] Proxy ready at http://localhost:8000
+╭───────── DevLinker Ready ─────────╮
+│ Proxy     http://localhost:8001   │
+│ WLAN      http://192.168.1.3:8001 │
+│ Public    disabled (use --url)    │
+╰───────────────────────────────────╯
 
-[OK] Tunnel provider: Cloudflare
-[OK] Public URL:
-    https://xxxx.trycloudflare.com
-Tip: Press Ctrl+Click to open link
+✨ Ready in 5.5s
+Powered by DevLinker 🚀
+```
 
-[INFO] Share this link with collaborators.
+Enable debug mode with live API request logging:
 
-DevLinker Ready (in 2.4s)
-Frontend: http://localhost:5173
-Backend:  http://localhost:5000
-Access Links:
-Local:  http://localhost:8000
-WLAN:   http://192.168.1.5:8000
-Public: https://xxxx.trycloudflare.com
-Tip: Press Ctrl+Click to open link
+```bash
+devlinker --debug
+```
+
+Debug mode request logger sample:
+
+```text
+🛠 Debug mode enabled: live API request logger is ON
+
+📡 Requests (Live)
+GET    /api/users               200  45ms
+POST   /api/login               401  120ms
 ```
 
 Version check:
@@ -145,24 +169,15 @@ By default, DevLinker starts **fast local proxy only** (no tunnel). To enable a 
 devlinker --url
 ```
 
-In your terminal output, you'll see:
-
-
-URL, run:
-
-```bash
-devlinker --url
-```
-
 This will start the proxy and open a public tunnel (Cloudflare or ngrok). The output will show:
 
 ```text
 🌍 Enabling public tunnel...
-[OK] Tunnel provider: Cloudflare
-[OK] Public URL:
+✔ Tunnel provider: Cloudflare
+✔ Public URL:
      https://xxxx.trycloudflare.com
-Tip: Press Ctrl+Click to open link
-[INFO] Share this link with collaborators.
+ℹ Tip: Ctrl+Click to open link
+ℹ Share this link with collaborators.
 ```
 
 To force tunnel off (even if --url is passed):
@@ -222,13 +237,11 @@ devlinker --frontend 5173 --backend 5000 --proxy-port 18000
 Default behavior also tries fallback ports automatically when 8000 is busy:
 
 ```text
-[WARN] Port 8000 in use
-[INFO] Using proxy port: 8001
+⚠ Port 8000 in use
+ℹ Using proxy port: 8001
 ```
 
-- 8001
-- 8002
-- 18000
+By default it scans the next 10 ports after the requested one, then tries `18000`.
 
 Frontend detection behavior:
 
@@ -246,6 +259,41 @@ fetch("/api/endpoint")
 ```
 
 Do not hardcode backend host URLs in frontend code.
+
+DevLinker also writes/updates a managed block in `frontend/.env.local`:
+
+```env
+# devlinker-managed:start
+VITE_API_URL=http://localhost:8001
+# devlinker-managed:end
+```
+
+This keeps frontend API calls consistently routed through the proxy.
+
+Use the proxy URL as your single entry point during development:
+
+```text
+http://localhost:<proxy-port>
+```
+
+Avoid direct backend calls like `http://localhost:5000` from browser-facing code.
+
+## Configuration File
+
+DevLinker loads config from the first file found in this order:
+
+1. `devlinker.yaml`
+2. `devlinker.yml`
+3. `devlinker.json`
+
+Example:
+
+```yaml
+frontend: 5173
+backend: 5000
+proxy_port: 8001
+tunnel: false
+```
 
 ## Backend Auto-Detection
 
@@ -302,12 +350,15 @@ For containerized Flask backends, ensure:
 
 - runner.py expects frontend project in frontend and Python app in backend/app.py.
 - If those paths do not exist, Dev Linker skips launch and only tries to detect already-running services.
+- If frontend is missing but backend is available, DevLinker continues in backend-only mode.
 - Tunnel selection order is: cloudflared (TryCloudflare), then ngrok.
 - If cloudflared is unavailable and ngrok is not configured, Dev Linker prints one-time setup guidance.
 - You may need to set ngrok auth once on your machine using ngrok config add-authtoken <token>.
 - Dev Linker prints a public URL with `ngrok-skip-browser-warning=true` only when ngrok is used.
 - Startup output includes selected tunnel provider (`cloudflare` or `ngrok`).
 - Proxy layer now supports WebSocket upgrades, including Vite HMR over shared links.
+- Proxy handles common CORS/preflight behavior and adds camera/mic permissions policy headers.
+- Live API request logging is disabled by default and only enabled with `devlinker --debug`.
 - Proxy listens on `0.0.0.0` and can print a WLAN URL for same-network sharing.
 - If WLAN access fails on Windows, allow the proxy port in firewall and confirm devices are on the same network.
 

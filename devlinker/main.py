@@ -1,11 +1,34 @@
 from __future__ import annotations
 
 import socket
+import sys
 import time
 import webbrowser
+from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import click
+
+try:
+    from rich import box
+    from rich.align import Align
+    from rich.console import Console
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
+
+    _RICH_AVAILABLE = True
+    _CONSOLE = Console()
+except ImportError:  # pragma: no cover - fallback when rich is unavailable
+    box = None
+    Align = None
+    Console = None
+    Live = None
+    Panel = None
+    Text = None
+    _RICH_AVAILABLE = False
+    _CONSOLE = None
 
 from . import __version__
 from .detector import check_port, detect_ports, is_vite_port
@@ -46,6 +69,91 @@ SUPPORT_QR_FALLBACK = [
     "#######..............",
 ]
 
+def _ui_print(message: str, style: str | None = None) -> None:
+    if _CONSOLE:
+        _CONSOLE.print(message, style=style)
+    else:
+        click.secho(message)
+
+
+def _ui_status(icon: str, message: str, style: str | None = None) -> None:
+    _ui_print(f"{icon} {message}", style=style)
+
+
+class _LiveStatus:
+    def __init__(self, console: Any) -> None:
+        self._console = console
+        self._order = ["Frontend", "Backend", "Proxy"]
+        if Text is not None:
+            self._rows: dict[str, Any] = {
+                "Frontend": Text("⏳ Starting...", style="cyan"),
+                "Backend": Text("⏳ Starting...", style="cyan"),
+                "Proxy": Text("⏳ Starting...", style="cyan"),
+            }
+        else:
+            self._rows = {
+                "Frontend": "Starting...",
+                "Backend": "Starting...",
+                "Proxy": "Starting...",
+            }
+        self._live: Any = None
+
+    def start(self) -> None:
+        if Live is None:
+            return
+        self._live = Live(
+            self._render(),
+            console=self._console,
+            refresh_per_second=8,
+            transient=True,
+        )
+        self._live.start()
+
+    def stop(self) -> None:
+        if self._live:
+            self._live.stop()
+            self._live = None
+
+    def update(self, label: str, text: str, style: str | None = None) -> None:
+        if Text is None:
+            return
+        self._rows[label] = Text(text, style=style) if style else Text(text)
+        if self._live:
+            self._live.update(self._render())
+
+    def _render(self) -> Any:
+        if Text is None:
+            return ""
+        width = max(len(label) for label in self._order)
+        lines = []
+        for label in self._order:
+            prefix = Text(f"{label:<{width}}  ")
+            value = self._rows.get(label, Text(""))
+            lines.append(prefix + value)
+        output = Text()
+        for index, line in enumerate(lines):
+            if index:
+                output.append("\n")
+            output.append_text(line)
+        return output
+
+
+def _can_use_live() -> bool:
+    return False
+
+
+def _print_banner() -> None:
+    if _CONSOLE and Panel and Text and Align and box:
+        title = Text(f"♾️  DevLinker v{__version__}", style="bold white")
+        subtitle = Text("Smart Local Dev Environment", style="dim")
+        body = Align.center(Text.assemble(title, "\n", subtitle))
+        panel = Panel.fit(body, box=box.ROUNDED, border_style="cyan")
+        _CONSOLE.print(panel)
+        return
+
+    banner = "\n" + ("═" * 36) + f"\n♾️  DevLinker v{__version__} ⚡\n" + ("═" * 36)
+    click.secho(banner, fg="green", bold=True)
+
 
 def _is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -62,14 +170,15 @@ def _select_proxy_port(requested_port: int) -> int:
             f"Proxy port {requested_port} is already in use. Choose another with --proxy-port."
         )
 
-    for candidate in (8001, 8002, 18000):
+    candidates = list(range(requested_port + 1, requested_port + 11)) + [18000]
+    for candidate in candidates:
         if not _is_port_in_use(candidate):
-            print("[WARN] Port 8000 in use")
-            print(f"[INFO] Using proxy port: {candidate}")
+            _ui_status("⚠", f"Port {requested_port} in use", style="yellow")
+            _ui_status("ℹ", f"Using proxy port: {candidate}", style="blue")
             return candidate
 
     raise click.ClickException(
-        "No free proxy port found in fallback list (8000, 8001, 8002, 18000)."
+        f"No free proxy port found near {requested_port}. Try --proxy-port with another value."
     )
 
 
@@ -86,48 +195,80 @@ def _with_ngrok_skip_warning(url: str) -> str:
 
 
 def _print_summary(
-    frontend_port: int,
+    frontend_port: int | None,
     backend_port: int,
     proxy_port: int,
     public_url: str | None,
     wlan_url: str | None,
     startup_seconds: float,
 ) -> None:
-    import click
+    if _CONSOLE and Panel and box:
+        lines = [
+            f"Proxy     http://localhost:{proxy_port}",
+        ]
+        lines.append(f"WLAN      {wlan_url}" if wlan_url else "WLAN      unavailable")
+        lines.append(f"Public    {public_url}" if public_url else "Public    disabled (use --url)")
+        body = "\n".join(lines)
+        panel = Panel.fit(body, title="DevLinker Ready", border_style="green", box=box.ROUNDED)
+        _CONSOLE.print(panel)
+        _ui_print(f"✨ Ready in {startup_seconds:.1f}s", style="bold green")
+        _ui_print("Powered by DevLinker 🚀", style="magenta")
+        _ui_print("", style=None)
+        _ui_print("💖 Support DevLinker", style="bold magenta")
+        _ui_print("Help keep this tool free & growing!", style="white")
+        _ui_print("👉 Run: devlinker support", style="magenta")
+        _ui_print(f"💳 UPI: {SUPPORT_UPI_ID}", style="yellow")
+        return
+
     banner = "\n" + ("═" * 36) + "\n🚀 DevLinker Ready\n" + ("═" * 36)
-    click.secho(f"{banner}", fg="green", bold=True)
-    click.secho(f"⏱️  Startup time: {startup_seconds:.1f}s\n", fg="yellow")
-    click.secho(f"Frontend: ", nl=False, fg="blue"); click.secho(f"http://localhost:{frontend_port}", fg="cyan", bold=True)
-    click.secho(f"Backend:  ", nl=False, fg="blue"); click.secho(f"http://localhost:{backend_port}", fg="cyan", bold=True)
-    click.secho("\nAccess Links:", fg="magenta", bold=True)
-    click.secho(f"  Local  → http://localhost:{proxy_port}", fg="white")
+    click.secho(banner, fg="green", bold=True)
+    click.secho(f"✨ Ready in {startup_seconds:.1f}s", fg="green")
+    click.secho("Powered by DevLinker 🚀", fg="magenta")
+    click.secho(f"Proxy:    http://localhost:{proxy_port}", fg="white")
     if wlan_url:
-        click.secho(f"  WLAN   → {wlan_url}", fg="white")
+        click.secho(f"WLAN:     {wlan_url}", fg="white")
     else:
-        click.secho("  WLAN   → unavailable", fg="white")
+        click.secho("WLAN:     unavailable", fg="white")
     if public_url:
-        click.secho(f"  Public → {public_url}", fg="cyan", bold=True)
+        click.secho(f"Public:   {public_url}", fg="cyan", bold=True)
         click.secho("Tip: Press Ctrl+Click to open link", fg="magenta")
     else:
-        click.secho("  Public → Disabled (use --url)", fg="yellow")
-    click.secho("\n💡 Enjoying DevLinker? Support the project ❤️", fg="magenta")
-    click.secho(f"UPI: {SUPPORT_UPI_ID}", fg="yellow")
-    click.secho("Run: devlinker support (shows QR)", fg="yellow")
+        click.secho("Public:   disabled (use --url)", fg="yellow")
+    click.secho("\n💖 Support DevLinker 🚀", fg="magenta", bold=True)
+    click.secho("Help keep this tool free & growing!", fg="white")
+    click.secho("👉 Run: devlinker support", fg="magenta")
+    click.secho(f"💳 UPI: {SUPPORT_UPI_ID}", fg="yellow")
 
 
 def _print_support_qr(open_link: bool) -> None:
-    click.secho("\n💖 Support DevLinker 🚀", fg="magenta", bold=True)
-    click.secho("Help keep the tool free and improving!", fg="white")
-    click.secho(f"\nUPI: {SUPPORT_UPI_ID}", fg="yellow")
-    click.secho(f"Link: {SUPPORT_UPI_LINK}\n", fg="cyan")
+    if _CONSOLE and Panel and box:
+        panel = Panel.fit(
+            "Scan the QR to support the project",
+            title="💖 Support DevLinker",
+            border_style="magenta",
+            box=box.ROUNDED,
+        )
+        _CONSOLE.print(panel)
+    else:
+        banner = "\n" + ("═" * 36) + "\n💖 Support DevLinker 🚀\n" + ("═" * 36)
+        click.secho(banner, fg="magenta", bold=True)
+        click.secho("Powered by DevLinker 🚀", fg="magenta")
+        click.secho("\nScan the QR to support the project:", fg="white")
 
     try:
         import qrcode
     except ImportError:
-        click.secho("ASCII QR (fallback):", fg="yellow")
+        click.secho("\nASCII QR (fallback):", fg="yellow")
         for row in SUPPORT_QR_FALLBACK:
             click.echo(row.replace("#", "##").replace(".", "  "))
         click.secho("\nInstall full QR support: pip install qrcode[pil]", fg="yellow")
+        click.secho(f"\nUPI ID: {SUPPORT_UPI_ID}", fg="yellow")
+        click.secho(f"Link: {SUPPORT_UPI_LINK}\n", fg="cyan")
+        click.secho("Your support helps:", fg="white")
+        click.secho("✔ Keep this tool free", fg="green")
+        click.secho("✔ Add new features", fg="green")
+        click.secho("✔ Improve performance", fg="green")
+        click.secho("\nThank you 🙌", fg="magenta")
         if open_link:
             webbrowser.open(SUPPORT_UPI_LINK)
         return
@@ -137,22 +278,117 @@ def _print_support_qr(open_link: bool) -> None:
     qr.make(fit=True)
     qr.print_ascii(invert=True)
 
+    click.secho(f"\nUPI ID: {SUPPORT_UPI_ID}", fg="yellow")
+    click.secho(f"Link: {SUPPORT_UPI_LINK}\n", fg="cyan")
+    click.secho("Your support helps:", fg="white")
+    click.secho("✔ Keep this tool free", fg="green")
+    click.secho("✔ Add new features", fg="green")
+    click.secho("✔ Improve performance", fg="green")
+    click.secho("\nThank you 🙌", fg="magenta")
+
     if open_link:
         webbrowser.open(SUPPORT_UPI_LINK)
 
 
-def _get_local_ip() -> str | None:
+def _write_frontend_api_env(proxy_port: int) -> None:
+    """Keep frontend calls routed through the proxy in local development."""
+    frontend_dir = Path("frontend")
+    if not frontend_dir.is_dir():
+        return
+
+    env_path = frontend_dir / ".env.local"
+    start_marker = "# devlinker-managed:start"
+    end_marker = "# devlinker-managed:end"
+    managed_block = (
+        f"{start_marker}\n"
+        f"VITE_API_URL=http://localhost:{proxy_port}\n"
+        f"{end_marker}"
+    )
+
+    try:
+        existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+        if start_marker in existing and end_marker in existing:
+            before, _, tail = existing.partition(start_marker)
+            _, _, after = tail.partition(end_marker)
+            updated = f"{before}{managed_block}{after}"
+        elif existing.strip():
+            updated = f"{existing.rstrip()}\n\n{managed_block}\n"
+        else:
+            updated = f"{managed_block}\n"
+
+        env_path.write_text(updated, encoding="utf-8")
+        _ui_status("✔", f"Updated frontend/.env.local with VITE_API_URL=http://localhost:{proxy_port}", style="green")
+    except OSError:
+        _ui_status("⚠", "Could not update frontend/.env.local; set VITE_API_URL manually.", style="yellow")
+
+
+def _get_local_ips() -> list[str]:
+    def _is_usable_ipv4(ip_address: str | None) -> bool:
+        if not ip_address:
+            return False
+        if ip_address.startswith("127.") or ip_address.startswith("169.254."):
+            return False
+        return True
+
+    candidates: list[str] = []
+
+    def _add_candidate(ip_address: str | None) -> None:
+        if not _is_usable_ipv4(ip_address):
+            return
+        if ip_address is None:
+            return
+        if ip_address in candidates:
+            return
+        candidates.append(ip_address)
+
+    def _is_private_lan_ipv4(ip_address: str) -> bool:
+        if ip_address.startswith("10.") or ip_address.startswith("192.168."):
+            return True
+        if ip_address.startswith("172."):
+            try:
+                second_octet = int(ip_address.split(".")[1])
+                return 16 <= second_octet <= 31
+            except (IndexError, ValueError):
+                return False
+        return False
+
+    # Prefer outbound-route detection first.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("8.8.8.8", 80))
-        ip_address = sock.getsockname()[0]
-        if ip_address and not ip_address.startswith("127."):
-            return ip_address
-        return None
+        _add_candidate(sock.getsockname()[0])
     except OSError:
-        return None
+        pass
     finally:
         sock.close()
+
+    # Fallback to hostname resolution when default-route probing is unavailable.
+    try:
+        _hostname, _aliases, addresses = socket.gethostbyname_ex(socket.gethostname())
+        for candidate in addresses:
+            _add_candidate(candidate)
+    except OSError:
+        pass
+
+    # Final fallback using addrinfo to handle edge resolver setups.
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET, socket.SOCK_DGRAM)
+        for info in infos:
+            candidate = info[4][0]
+            if not isinstance(candidate, str):
+                continue
+            _add_candidate(candidate)
+    except OSError:
+        pass
+
+    private_candidates = [ip for ip in candidates if _is_private_lan_ipv4(ip)]
+    other_candidates = [ip for ip in candidates if ip not in private_candidates]
+    return private_candidates + other_candidates
+
+
+def _get_local_ip() -> str | None:
+    candidates = _get_local_ips()
+    return candidates[0] if candidates else None
 
 
 def _wait_for_readiness(
@@ -162,14 +398,33 @@ def _wait_for_readiness(
     retries: int = 15,
     delay_seconds: float = 1.0,
 ) -> bool:
-    print(f"[INFO] Waiting for {label} on :{port}...")
+    _ui_status("⏳", f"Waiting for {label} ({port})...", style="cyan")
     for attempt in range(1, retries + 1):
         if checker(port):
-            print(f"[OK] {label} ready on :{port}")
+            _ui_status("✔", f"{label} is live ({port})", style="green")
             return True
         if attempt < retries:
             time.sleep(delay_seconds)
-    print(f"[WARN] {label} not ready on :{port} after {retries} checks")
+    _ui_status("⚠", f"{label} not ready on {port} after {retries} checks", style="yellow")
+    return False
+
+
+def _wait_for_readiness_live(
+    label: str,
+    port: int,
+    checker,
+    live_status: _LiveStatus,
+    retries: int = 15,
+    delay_seconds: float = 1.0,
+) -> bool:
+    live_status.update(label, f"⏳ Waiting ({port})...", style="cyan")
+    for attempt in range(1, retries + 1):
+        if checker(port):
+            live_status.update(label, f"✔ Running ({port})", style="green")
+            return True
+        if attempt < retries:
+            time.sleep(delay_seconds)
+    live_status.update(label, f"⚠ Not ready ({port})", style="yellow")
     return False
 
 
@@ -197,7 +452,7 @@ def _wait_for_readiness(
     "--interactive-backend/--no-interactive-backend",
     default=True,
     show_default=True,
-    help="Prompt to choose backend when local and Docker candidates are both available.",
+    help="Prompt to choose backend when multiple backends are detected.",
 )
 @click.option(
     "--lan/--no-lan",
@@ -206,7 +461,7 @@ def _wait_for_readiness(
     show_default=True,
     help="Show WLAN sharing URL for devices on the same network.",
 )
-@click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging.")
+@click.option("--debug", is_flag=True, help="Enable debug mode and live API request logging.")
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -263,10 +518,14 @@ def _run_proxy(
         pass
 
     started = time.perf_counter()
-    banner = "\n" + ("═" * 36) + f"\n⚡ Dev Linker v{__version__} ⚡\n" + ("═" * 36)
-    click.secho(banner, fg="green", bold=True)
-    click.secho("[INFO] Mode: Auto (FastAPI async proxy + Docker detection)", fg="blue")
-    click.secho("[INFO] Booting local services...", fg="blue")
+    _print_banner()
+    _ui_status("✔", "Detecting project...", style="green")
+    _ui_status("⏳", "Booting local services...", style="cyan")
+
+    live_status = None
+    if _can_use_live():
+        live_status = _LiveStatus(_CONSOLE)
+        live_status.start()
 
     start_servers(auto_start_docker=auto_start_docker)
 
@@ -279,57 +538,109 @@ def _run_proxy(
     if backend_port is None:
         raise SystemExit(1)
 
-    click.secho("[INFO] Detecting frontend/backend ports...", fg="blue")
+    if not live_status:
+        _ui_status("⏳", "Detecting ports...", style="cyan")
     frontend_port, backend_port = detect_ports(frontend=frontend, backend=backend_port)
 
-    if frontend_port is None:
-        raise click.ClickException(
-            "Frontend not detected on common ports. Start frontend first or set --frontend (example: 5173)."
-        )
     if backend_port is None:
         raise click.ClickException(
-            "Backend not detected on common ports. Start backend first or set --backend (example: 5000)."
+            "Backend not detected.\n"
+            "Possible reasons:\n"
+            "- Backend server is not started\n"
+            "- Wrong backend port\n"
+            "- App crashed during startup\n"
+            "Fix: start backend first, or pass --backend (example: 5000)."
         )
 
-    if not _wait_for_readiness("Frontend", frontend_port, is_vite_port):
-        raise click.ClickException(
-            f"Frontend port {frontend_port} is reachable but does not look like a Vite dev server. "
-            "Run frontend with Dev Linker or pass the correct --frontend port."
-        )
+    if frontend_port is not None:
+        if live_status:
+            frontend_ready = _wait_for_readiness_live(
+                "Frontend",
+                frontend_port,
+                is_vite_port,
+                live_status,
+            )
+        else:
+            frontend_ready = _wait_for_readiness("Frontend", frontend_port, is_vite_port)
 
-    if not _wait_for_readiness("Backend", backend_port, check_port):
+        if not frontend_ready:
+            raise click.ClickException(
+                f"Frontend port {frontend_port} is reachable but does not look like a Vite dev server. "
+                "Run frontend with Vite, or pass the correct --frontend port."
+            )
+    elif live_status:
+        live_status.update("Frontend", "⚠ Not detected (backend-only mode)", style="yellow")
+    else:
+        _ui_status("⚠", "Frontend not detected; running backend-only mode.", style="yellow")
+
+    if live_status:
+        backend_ready = _wait_for_readiness_live(
+            "Backend",
+            backend_port,
+            check_port,
+            live_status,
+        )
+    else:
+        backend_ready = _wait_for_readiness("Backend", backend_port, check_port)
+
+    if not backend_ready:
         raise click.ClickException(
             f"Backend port {backend_port} is not reachable. Verify backend is running and listening on localhost."
         )
 
     proxy_port = _select_proxy_port(proxy_port)
+    _write_frontend_api_env(proxy_port)
 
-    click.secho(f"[OK] Frontend  → {frontend_port}", fg="green")
-    click.secho(f"[OK] Backend   → {backend_port}\n", fg="green")
+    if not live_status:
+        frontend_status = str(frontend_port) if frontend_port is not None else "none"
+        _ui_status("✔", f"Frontend: {frontend_status} | Backend: {backend_port}", style="green")
 
-    click.secho(f"[INFO] Starting proxy on :{proxy_port}...", fg="blue")
-    start_proxy(frontend_port, backend_port, proxy_port=proxy_port)
+    if live_status:
+        live_status.update("Proxy", f"⏳ Starting ({proxy_port})...", style="cyan")
+    else:
+        _ui_status("⏳", f"Starting proxy ({proxy_port})...", style="cyan")
+    start_proxy(
+        frontend_port,
+        backend_port,
+        proxy_port=proxy_port,
+        enable_debug_logs=debug,
+    )
 
     # Allow proxy thread to bind before opening tunnel.
     time.sleep(1)
 
+    if live_status:
+        live_status.update("Proxy", f"✔ Active ({proxy_port})", style="green")
+
     wlan_url: str | None = None
     if lan_enabled:
-        local_ip = _get_local_ip()
-        if local_ip:
-            wlan_url = f"http://{local_ip}:{proxy_port}"
-            click.secho(f"[OK] WLAN URL: {wlan_url}", fg="green")
-            click.secho("[INFO] Share WLAN link with teammates on same WiFi/LAN.", fg="blue")
-            click.secho(
-                "[WARN] Camera/mic may be blocked on WLAN HTTP links by browser security."
-                " Use localhost or --url for HTTPS.",
-                fg="yellow",
+        local_ips = _get_local_ips()
+        if local_ips:
+            wlan_url = f"http://{local_ips[0]}:{proxy_port}"
+            _ui_status("✔", f"LAN share: {wlan_url}", style="green")
+            if len(local_ips) > 1:
+                alternative_urls = ", ".join(f"http://{ip}:{proxy_port}" for ip in local_ips[1:])
+                _ui_status("ℹ", f"Alternate LAN URLs: {alternative_urls}", style="blue")
+            _ui_status("ℹ", "Share with teammates on the same WiFi/LAN.", style="blue")
+            _ui_status(
+                "⚠",
+                "Camera/mic may be blocked on HTTP. Use localhost or --url for HTTPS.",
+                style="yellow",
+            )
+            _ui_status(
+                "ℹ",
+                "If link does not open on other devices, allow Python/DevLinker in firewall and ensure both devices are on same subnet.",
+                style="blue",
             )
         else:
-            click.secho("[WARN] WLAN URL unavailable (no active LAN interface detected).", fg="yellow")
-            click.secho("[INFO] If LAN sharing fails, allow proxy port in firewall and use same network.", fg="yellow")
+            _ui_status("⚠", "LAN URL unavailable (no active interface detected).", style="yellow")
+            _ui_status("ℹ", "Tip: connect to WiFi, disable VPN/proxy adapters, then restart DevLinker.", style="blue")
 
-    click.secho(f"\n[OK] Proxy ready at http://localhost:{proxy_port}\n", fg="green", bold=True)
+    if not live_status:
+        _ui_status("✔", f"Proxy ready: http://localhost:{proxy_port}", style="green")
+        _ui_status("ℹ", f"Use http://localhost:{proxy_port} as the single app entry point.", style="blue")
+        if debug:
+            _ui_status("🛠", "Debug mode enabled: live API request logger is ON", style="magenta")
 
     warning_free_url: str | None = None
     enable_tunnel = False
@@ -340,24 +651,24 @@ def _run_proxy(
 
     if enable_tunnel:
         try:
-            click.secho("\n🌍 Enabling public tunnel...", fg="green", bold=True)
+            _ui_status("🌍", "Enabling public tunnel...", style="green")
             provider, public_url = start_tunnel(proxy_port)
             warning_free_url = _with_ngrok_skip_warning(public_url)
             provider_label = "Cloudflare" if provider == "cloudflare" else "ngrok"
-            click.secho(f"[OK] Tunnel provider: {provider_label}", fg="blue")
-            click.secho(f"[OK] Public URL:", fg="blue")
-            click.secho(f"     {warning_free_url}\n", fg="cyan", bold=True)
-            click.secho("Tip: Press Ctrl+Click to open link", fg="magenta")
-            click.secho("[INFO] Share this link with collaborators.", fg="magenta")
+            _ui_status("✔", f"Tunnel provider: {provider_label}", style="blue")
+            _ui_status("✔", f"Public URL: {warning_free_url}", style="cyan")
+            _ui_status("ℹ", "Tip: Ctrl+Click to open link", style="magenta")
+            _ui_status("ℹ", "Share this link with collaborators.", style="magenta")
         except RuntimeError as exc:
-            click.secho(f"[WARN] Tunnel failed: {exc}", fg="red")
-            click.secho("[INFO] Next step: install cloudflared or configure ngrok auth.", fg="yellow")
-            click.secho("[INFO] Tip: run 'ngrok config add-authtoken <token>' for ngrok fallback.", fg="yellow")
-            click.secho(f"[OK] Continuing with local proxy at http://localhost:{proxy_port}", fg="green")
+            _ui_status("✖", f"Tunnel failed: {exc}", style="red")
+            _ui_status("ℹ", "Install cloudflared or configure ngrok auth.", style="yellow")
+            _ui_status("ℹ", "Tip: run 'ngrok config add-authtoken <token>'", style="yellow")
+            _ui_status("✔", f"Continuing with local proxy at http://localhost:{proxy_port}", style="green")
     else:
-        click.secho("\n⚡ Skipping public tunnel (use --url to enable)", fg="yellow", bold=True)
-        click.secho("\n💡 Need to share outside network?", fg="magenta")
-        click.secho("👉 Run: devlinker --url", fg="magenta", bold=True)
+        _ui_status("⚡", "Public tunnel disabled (use --url)", style="yellow")
+
+    if live_status:
+        live_status.stop()
 
     _print_summary(
         frontend_port,
@@ -370,9 +681,9 @@ def _run_proxy(
 
     try:
         while True:
-            time.sleep(1)
+            time.sleep(0.5)
     except KeyboardInterrupt:
-        click.secho("\n[INFO] Dev Linker stopped.", fg="yellow")
+        _ui_status("ℹ", "DevLinker stopped.", style="yellow")
 
 
 @click.command()

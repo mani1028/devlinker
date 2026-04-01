@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import threading
+import time
 from typing import Dict, Optional
 from urllib.parse import urlencode
 
@@ -22,6 +22,8 @@ import threading
 _recent_requests = []
 _recent_lock = threading.Lock()
 _printed_fixes = set()
+_printed_live_header = False
+LIVE_REQUEST_LOGGING_ENABLED = False
 
 
 def _format_request_context(path: str, method: str | None, status: int, target: str) -> str:
@@ -37,9 +39,27 @@ def _print_fix_once(message: str) -> None:
     from devlinker.logger import print_fix
     print_fix(message)
 
+
+def _should_log_live_request(path: str) -> bool:
+    if not LIVE_REQUEST_LOGGING_ENABLED:
+        return False
+    return path == "/api" or path.startswith("/api/")
+
+
+def _print_live_request_line(method: str, path: str, status: int, elapsed_ms: float) -> None:
+    global _printed_live_header
+    with _recent_lock:
+        if not _printed_live_header:
+            print("\n📡 Requests (Live)")
+            _printed_live_header = True
+    print(f"{method.upper():<6} {path:<24} {status:<3} {elapsed_ms:.0f}ms")
+
 class RequestInspector:
     def analyze(self, path, status, target, method=None, response_text=None):
         warnings = []
+        normalized_method = method.upper() if method else ""
+        is_root_document_request = path == "/" and normalized_method in {"GET", "HEAD", "OPTIONS"}
+        is_backend_request = target == "backend" or path == "/api" or path.startswith("/api/")
         # Ignore static files and paths
         static_exts = [".js", ".css", ".ico", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2", ".ttf", ".map"]
         IGNORE_PATHS = ["/@vite", "/assets", "/favicon.ico", "/src", "/node_modules"]
@@ -48,7 +68,7 @@ class RequestInspector:
         if any(path.startswith(p) for p in IGNORE_PATHS):
             return warnings
         # Only warn for missing /api prefix if status is 404, method is POST/PUT/DELETE, and not static/ignored
-        if status == 404 and method and method.upper() in ["POST", "PUT", "DELETE"]:
+        if is_backend_request and status == 404 and normalized_method in ["POST", "PUT", "DELETE"]:
             if not path.startswith("/api"):
                 # Optionally, check response_text for "Not Found"
                 if response_text is None or "not found" in response_text.lower():
@@ -56,7 +76,7 @@ class RequestInspector:
                     if state.add(issue, level="MEDIUM", category="routing"):
                         warnings.append(issue)
         # 2. 404 detection (general)
-        if status == 404:
+        if is_backend_request and status == 404 and not is_root_document_request:
             issue = f"Route not found → check backend route: {path}"
             if state.add(issue, level="HIGH", category="routing"):
                 warnings.append(issue)
@@ -91,6 +111,25 @@ HOP_BY_HOP_HEADERS = {
 def _apply_security_headers(headers: Dict[str, str]) -> Dict[str, str]:
     # Explicitly allow camera/mic for the current origin.
     headers["Permissions-Policy"] = "camera=(self), microphone=(self)"
+    return headers
+
+
+def _apply_cors_headers(headers: Dict[str, str], request: Request) -> Dict[str, str]:
+    origin = request.headers.get("origin", "").strip()
+    # Credentialed CORS cannot use wildcard origin; reflect explicit Origin when present.
+    if origin:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+    else:
+        headers["Access-Control-Allow-Origin"] = "*"
+    headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+    requested_headers = request.headers.get("access-control-request-headers", "").strip()
+    headers["Access-Control-Allow-Headers"] = requested_headers or "*"
+    vary = headers.get("Vary", "")
+    vary_values = [token.strip() for token in vary.split(",") if token.strip()]
+    if origin and "Origin" not in vary_values:
+        vary_values.append("Origin")
+    headers["Vary"] = ", ".join(vary_values)
     return headers
 
 
@@ -144,6 +183,8 @@ def _filter_websocket_headers(incoming: Dict[str, str]) -> Dict[str, str]:
 def _target_port(path: str) -> Optional[int]:
     if path == "/api" or path.startswith("/api/"):
         return BACKEND
+    if FRONTEND is None:
+        return BACKEND
     return FRONTEND
 
 
@@ -163,6 +204,12 @@ def _build_target_ws_url(port: int, path: str, query: str) -> str:
 
 
 async def _forward_http(request: Request) -> Response:
+    if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
+        return Response(
+            status_code=204,
+            headers=_apply_cors_headers(_apply_security_headers({}), request),
+        )
+
     # Serve instant loader only for localhost HTML document navigations.
     client_ip = request.client.host if request.client else None
     host_header = request.headers.get("host", "").lower()
@@ -242,7 +289,7 @@ async def _forward_http(request: Request) -> Response:
             content=loader_html,
             status_code=200,
             media_type="text/html",
-            headers=_apply_security_headers({}),
+            headers=_apply_cors_headers(_apply_security_headers({}), request),
         )
     from devlinker.logger import print_warning
     from devlinker.detector_ai import DevLinkerAI
@@ -251,6 +298,7 @@ async def _forward_http(request: Request) -> Response:
     ai = DevLinkerAI()
 
     target_port = _target_port(request.url.path)
+    target_name = "backend" if target_port == BACKEND else "frontend"
     if target_port is None:
         if request.url.path.startswith("/api"):
             status = 503
@@ -264,21 +312,34 @@ async def _forward_http(request: Request) -> Response:
                     )
                 else:
                     print_warning(f"{w} | {context}")
-            return PlainTextResponse("Backend is not configured.", status_code=status)
+            return PlainTextResponse(
+                "Backend is not configured.",
+                status_code=status,
+                headers=_apply_cors_headers(_apply_security_headers({}), request),
+            )
         status = 503
         warnings = inspector.analyze(request.url.path, status, "frontend", method=request.method)
         context = _format_request_context(request.url.path, request.method, status, "frontend")
         for w in warnings:
             print_warning(f"{w} | {context}")
-        return PlainTextResponse("Frontend is not configured.", status_code=status)
+        return PlainTextResponse(
+            "Frontend is not configured.",
+            status_code=status,
+            headers=_apply_cors_headers(_apply_security_headers({}), request),
+        )
 
     if HTTP_CLIENT is None:
         print_warning("Proxy HTTP client is not ready.")
-        return PlainTextResponse("Proxy HTTP client is not ready.", status_code=503)
+        return PlainTextResponse(
+            "Proxy HTTP client is not ready.",
+            status_code=503,
+            headers=_apply_cors_headers(_apply_security_headers({}), request),
+        )
 
     payload = await request.body()
     query_params = list(request.query_params.multi_items())
     target_url = _build_target_http_url(target_port, request.url.path, query_params)
+    started_at = time.perf_counter()
 
     try:
         upstream = await HTTP_CLIENT.request(
@@ -289,38 +350,58 @@ async def _forward_http(request: Request) -> Response:
         )
     except httpx.RequestError as exc:
         status = 502
-        warnings = inspector.analyze(request.url.path, status, "backend", method=request.method)
-        context = _format_request_context(request.url.path, request.method, status, "backend")
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        if _should_log_live_request(request.url.path):
+            _print_live_request_line(request.method, request.url.path, status, elapsed_ms)
+        warnings = inspector.analyze(request.url.path, status, target_name, method=request.method)
+        context = _format_request_context(request.url.path, request.method, status, target_name)
         for w in warnings:
             print_warning(f"{w} | {context}")
         ai_suggestions = ai.analyze_failure(str(exc))
         for s in ai_suggestions:
             _print_fix_once(f"{s} | {context}")
-        return PlainTextResponse(f"Upstream unavailable: {exc}", status_code=status)
+        return PlainTextResponse(
+            f"Upstream unavailable: {exc}",
+            status_code=status,
+            headers=_apply_cors_headers(_apply_security_headers({}), request),
+        )
 
     # Analyze response for warnings and fixes
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    if _should_log_live_request(request.url.path):
+        _print_live_request_line(request.method, request.url.path, upstream.status_code, elapsed_ms)
+
     warnings = inspector.analyze(
         request.url.path,
         upstream.status_code,
-        "backend",
+        target_name,
         method=request.method,
         response_text=upstream.text
     )
-    context = _format_request_context(request.url.path, request.method, upstream.status_code, "backend")
-    for w in warnings:
-        if "/api" in w:
-            print_warning(
-                f"API routing issue detected | {context}\n"
-                f"Fix: Try /api{request.url.path}"
-            )
-        else:
-            print_warning(f"{w} | {context}")
-    ai_suggestions = ai.analyze_failure(str(upstream.text))
-    for s in ai_suggestions:
-        _print_fix_once(f"{s} | {context}")
+    context = _format_request_context(request.url.path, request.method, upstream.status_code, target_name)
+    # Only print routing warnings for error responses or /api paths
+    # Suppress false positives for frontend assets (node_modules, src, etc.) that return 200
+    is_frontend_asset = any(p in request.url.path for p in ['/node_modules/', '/src/', '.jsx', '.js', '.css'])
+    if upstream.status_code >= 400 or (not is_frontend_asset and not target_name == "backend"):
+        for w in warnings:
+            if "/api" in w:
+                print_warning(
+                    f"API routing issue detected | {context}\n"
+                    f"Fix: Try /api{request.url.path}"
+                )
+            else:
+                print_warning(f"{w} | {context}")
+    if (target_name == "backend" or request.url.path == "/api" or request.url.path.startswith("/api/")) and upstream.status_code >= 400:
+        ai_context = f"{request.method.upper()} {request.url.path} {upstream.status_code} {upstream.text[:500]}"
+        ai_suggestions = ai.analyze_failure(ai_context)
+        for s in ai_suggestions:
+            _print_fix_once(f"{s} | {context}")
 
     # Inject loader overlay only for LAN/WiFi/public HTML responses.
-    headers = _apply_security_headers(_filter_response_headers(dict(upstream.headers)))
+    headers = _apply_cors_headers(
+        _apply_security_headers(_filter_response_headers(dict(upstream.headers))),
+        request,
+    )
     content_type = headers.get("content-type", "")
     is_html = "text/html" in content_type
     content = upstream.content
@@ -448,10 +529,17 @@ async def websocket_proxy(websocket: WebSocket, path: str) -> None:  # noqa: ARG
     await _proxy_websocket(websocket)
 
 
-def start_proxy(frontend_port: int, backend_port: int, proxy_port: int = 8000) -> None:
-    global FRONTEND, BACKEND
+def start_proxy(
+    frontend_port: Optional[int],
+    backend_port: int,
+    proxy_port: int = 8000,
+    enable_debug_logs: bool = False,
+) -> None:
+    global FRONTEND, BACKEND, LIVE_REQUEST_LOGGING_ENABLED, _printed_live_header
     FRONTEND = frontend_port
     BACKEND = backend_port
+    LIVE_REQUEST_LOGGING_ENABLED = enable_debug_logs
+    _printed_live_header = False
 
     thread = threading.Thread(
         target=lambda: uvicorn.run(app, host="0.0.0.0", port=proxy_port, log_level="warning"),
