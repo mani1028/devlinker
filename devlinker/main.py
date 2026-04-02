@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import sys
 import time
@@ -189,6 +190,18 @@ def _with_ngrok_skip_warning(url: str) -> str:
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["ngrok-skip-browser-warning"] = "true"
+    new_query = urlencode(query)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+
+def _with_link_token(url: str) -> str:
+    token = os.getenv("DEVLINKER_LINK_TOKEN", "").strip()
+    if not token:
+        return url
+
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["dl_token"] = token
     new_query = urlencode(query)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
@@ -616,12 +629,14 @@ def _run_proxy(
     if lan_enabled:
         local_ips = _get_local_ips()
         if local_ips:
-            wlan_url = f"http://{local_ips[0]}:{proxy_port}"
+            wlan_url = _with_link_token(f"http://{local_ips[0]}:{proxy_port}")
             _ui_status("✔", f"LAN share: {wlan_url}", style="green")
             if len(local_ips) > 1:
-                alternative_urls = ", ".join(f"http://{ip}:{proxy_port}" for ip in local_ips[1:])
+                alternative_urls = ", ".join(_with_link_token(f"http://{ip}:{proxy_port}") for ip in local_ips[1:])
                 _ui_status("ℹ", f"Alternate LAN URLs: {alternative_urls}", style="blue")
             _ui_status("ℹ", "Share with teammates on the same WiFi/LAN.", style="blue")
+            if os.getenv("DEVLINKER_LINK_TOKEN", "").strip():
+                _ui_status("🔒", "Token protection is ON for LAN/public traffic.", style="green")
             _ui_status(
                 "⚠",
                 "Camera/mic may be blocked on HTTP. Use localhost or --url for HTTPS.",
@@ -653,7 +668,7 @@ def _run_proxy(
         try:
             _ui_status("🌍", "Enabling public tunnel...", style="green")
             provider, public_url = start_tunnel(proxy_port)
-            warning_free_url = _with_ngrok_skip_warning(public_url)
+            warning_free_url = _with_link_token(_with_ngrok_skip_warning(public_url))
             provider_label = "Cloudflare" if provider == "cloudflare" else "ngrok"
             _ui_status("✔", f"Tunnel provider: {provider_label}", style="blue")
             _ui_status("✔", f"Public URL: {warning_free_url}", style="cyan")

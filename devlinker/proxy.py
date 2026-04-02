@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Dict, Optional
 from urllib.parse import urlencode
@@ -9,7 +10,7 @@ import httpx
 import uvicorn
 import websockets
 from fastapi import FastAPI, Request, Response, WebSocket
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.websockets import WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 
@@ -24,6 +25,7 @@ _recent_lock = threading.Lock()
 _printed_fixes = set()
 _printed_live_header = False
 LIVE_REQUEST_LOGGING_ENABLED = False
+MAX_RECENT_REQUESTS = 200
 
 
 def _format_request_context(path: str, method: str | None, status: int, target: str) -> str:
@@ -54,8 +56,34 @@ def _print_live_request_line(method: str, path: str, status: int, elapsed_ms: fl
             _printed_live_header = True
     print(f"{method.upper():<6} {path:<24} {status:<3} {elapsed_ms:.0f}ms")
 
+
+def _configured_link_token() -> str | None:
+    token = os.getenv("DEVLINKER_LINK_TOKEN", "").strip()
+    return token or None
+
+
+def _extract_presented_token(headers: Dict[str, str], query_params) -> str | None:
+    query_token = query_params.get("dl_token")
+    if query_token:
+        return query_token
+    direct_header = headers.get("x-devlinker-token", "").strip()
+    if direct_header:
+        return direct_header
+    auth_header = headers.get("authorization", "").strip()
+    bearer_prefix = "Bearer "
+    if auth_header.startswith(bearer_prefix):
+        return auth_header[len(bearer_prefix):].strip()
+    return None
+
+
+def _is_link_token_valid(expected_token: str | None, headers: Dict[str, str], query_params) -> bool:
+    if not expected_token:
+        return True
+    presented = _extract_presented_token(headers, query_params)
+    return bool(presented) and presented == expected_token
+
 class RequestInspector:
-    def analyze(self, path, status, target, method=None, response_text=None):
+    def analyze(self, path, status, target, method=None, response_text=None, elapsed_ms=None):
         warnings = []
         normalized_method = method.upper() if method else ""
         is_root_document_request = path == "/" and normalized_method in {"GET", "HEAD", "OPTIONS"}
@@ -87,14 +115,24 @@ class RequestInspector:
                 warnings.append(issue)
         # Log request for inspector
         with _recent_lock:
-            _recent_requests.append({"path": path, "status": status, "target": target})
-            if len(_recent_requests) > 50:
+            _recent_requests.append(
+                {
+                    "ts": int(time.time() * 1000),
+                    "method": normalized_method or "GET",
+                    "path": path,
+                    "status": status,
+                    "target": target,
+                    "latency_ms": round(float(elapsed_ms), 1) if elapsed_ms is not None else None,
+                }
+            )
+            if len(_recent_requests) > MAX_RECENT_REQUESTS:
                 _recent_requests.pop(0)
         return warnings
 
 FRONTEND: Optional[int] = None
 BACKEND: Optional[int] = None
 HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+UPSTREAM_HOST_CANDIDATES: tuple[str, ...] = ("127.0.0.1", "localhost", "::1")
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -188,22 +226,38 @@ def _target_port(path: str) -> Optional[int]:
     return FRONTEND
 
 
-def _build_target_http_url(port: int, path: str, query_params: list[tuple[str, str]]) -> str:
+def _format_host_for_url(host: str) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def _build_target_http_url(
+    port: int,
+    path: str,
+    query_params: list[tuple[str, str]],
+    host: str = "127.0.0.1",
+) -> str:
     query_string = urlencode(query_params, doseq=True)
-    base_url = f"http://127.0.0.1:{port}{path}"
+    base_url = f"http://{_format_host_for_url(host)}:{port}{path}"
     if not query_string:
         return base_url
     return f"{base_url}?{query_string}"
 
 
-def _build_target_ws_url(port: int, path: str, query: str) -> str:
-    base_url = f"ws://127.0.0.1:{port}{path}"
+def _build_target_ws_url(port: int, path: str, query: str, host: str = "127.0.0.1") -> str:
+    base_url = f"ws://{_format_host_for_url(host)}:{port}{path}"
     if not query:
         return base_url
     return f"{base_url}?{query}"
 
 
 async def _forward_http(request: Request) -> Response:
+    if request.url.path == "/__devlinker/logs":
+        return await logs_dashboard_data()
+    if request.url.path == "/__devlinker/dashboard":
+        return await logs_dashboard_page()
+
     if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
         return Response(
             status_code=204,
@@ -267,6 +321,13 @@ async def _forward_http(request: Request) -> Response:
     is_lan = mode == "lan"
     is_public = mode == "public"
     is_secure = _is_secure_request(request, host_header)
+    required_link_token = _configured_link_token()
+    if (is_lan or is_public) and not _is_link_token_valid(required_link_token, dict(request.headers), request.query_params):
+        return PlainTextResponse(
+            "Unauthorized link: include dl_token query or X-DevLinker-Token header.",
+            status_code=401,
+            headers=_apply_cors_headers(_apply_security_headers({}), request),
+        )
     is_instant = request.headers.get("x-devlinker-instant") == "1"
     accept_header = request.headers.get("accept", "")
     sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
@@ -338,16 +399,33 @@ async def _forward_http(request: Request) -> Response:
 
     payload = await request.body()
     query_params = list(request.query_params.multi_items())
-    target_url = _build_target_http_url(target_port, request.url.path, query_params)
     started_at = time.perf_counter()
 
     try:
-        upstream = await HTTP_CLIENT.request(
-            method=request.method,
-            url=target_url,
-            content=payload,
-            headers=_filter_request_headers(dict(request.headers)),
-        )
+        upstream = None
+        last_exc: httpx.RequestError | None = None
+        for upstream_host in UPSTREAM_HOST_CANDIDATES:
+            target_url = _build_target_http_url(
+                target_port,
+                request.url.path,
+                query_params,
+                host=upstream_host,
+            )
+            try:
+                upstream = await HTTP_CLIENT.request(
+                    method=request.method,
+                    url=target_url,
+                    content=payload,
+                    headers=_filter_request_headers(dict(request.headers)),
+                )
+                break
+            except httpx.RequestError as exc:
+                last_exc = exc
+
+        if upstream is None and last_exc is not None:
+            raise last_exc
+        if upstream is None:
+            raise RuntimeError("Unexpected empty upstream response")
     except httpx.RequestError as exc:
         status = 502
         elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -376,7 +454,8 @@ async def _forward_http(request: Request) -> Response:
         upstream.status_code,
         target_name,
         method=request.method,
-        response_text=upstream.text
+        response_text=upstream.text,
+        elapsed_ms=elapsed_ms,
     )
     context = _format_request_context(request.url.path, request.method, upstream.status_code, target_name)
     # Only print routing warnings for error responses or /api paths
@@ -435,6 +514,11 @@ async def _forward_http(request: Request) -> Response:
 
 
 async def _proxy_websocket(websocket: WebSocket) -> None:
+    required_link_token = _configured_link_token()
+    if required_link_token and not _is_link_token_valid(required_link_token, dict(websocket.headers), websocket.query_params):
+        await websocket.close(code=1008)
+        return
+
     target_port = _target_port(websocket.url.path)
     if target_port is None:
         await websocket.close(code=1013)
@@ -527,6 +611,102 @@ async def http_proxy(path: str, request: Request) -> Response:  # noqa: ARG001
 @app.websocket("/{path:path}")
 async def websocket_proxy(websocket: WebSocket, path: str) -> None:  # noqa: ARG001
     await _proxy_websocket(websocket)
+
+
+@app.get("/__devlinker/logs")
+async def logs_dashboard_data() -> JSONResponse:
+        with _recent_lock:
+                records = list(_recent_requests[-100:])
+        return JSONResponse({"count": len(records), "items": records})
+
+
+@app.get("/__devlinker/dashboard")
+async def logs_dashboard_page() -> HTMLResponse:
+        html = """<!doctype html>
+<html>
+<head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+    <title>DevLinker API Logs</title>
+    <style>
+        :root { --bg:#f4f7fb; --card:#ffffff; --ink:#0f172a; --muted:#64748b; --ok:#065f46; --warn:#92400e; --err:#991b1b; --line:#dbe3ee; }
+        body { margin:0; font-family:\"Segoe UI\",\"Trebuchet MS\",sans-serif; background: radial-gradient(circle at top left,#e7f1ff,transparent 45%), var(--bg); color:var(--ink); }
+        .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
+        .card { background: var(--card); border:1px solid var(--line); border-radius:14px; box-shadow: 0 10px 25px rgba(15,23,42,.06); overflow:hidden; }
+        h1 { margin:0; font-size: 1.4rem; }
+        .head { padding: 14px 16px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); }
+        .meta { color:var(--muted); font-size:.9rem; }
+        table { width:100%; border-collapse: collapse; }
+        th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; font-size:.9rem; }
+        th { color:var(--muted); font-weight:600; }
+        .s2 { color: var(--ok); font-weight: 700; }
+        .s4 { color: var(--warn); font-weight: 700; }
+        .s5 { color: var(--err); font-weight: 700; }
+        .path { font-family:Consolas, monospace; }
+        .empty { padding: 20px; color: var(--muted); }
+    </style>
+</head>
+<body>
+    <div class=\"wrap\">
+        <div class=\"card\">
+            <div class=\"head\">
+                <h1>API Logs Dashboard</h1>
+                <div class=\"meta\" id=\"meta\">Waiting for traffic...</div>
+            </div>
+            <div id=\"content\" class=\"empty\">No requests yet.</div>
+        </div>
+    </div>
+    <script>
+        function statusClass(code){
+            if(code >= 500) return 's5';
+            if(code >= 400) return 's4';
+            return 's2';
+        }
+        function ago(ms){
+            const d = Date.now() - ms;
+            if (d < 1000) return 'now';
+            if (d < 60000) return Math.floor(d/1000) + 's ago';
+            return Math.floor(d/60000) + 'm ago';
+        }
+        function render(items){
+            const content = document.getElementById('content');
+            const meta = document.getElementById('meta');
+            if(!items.length){
+                content.className = 'empty';
+                content.textContent = 'No requests yet.';
+                meta.textContent = 'Waiting for traffic...';
+                return;
+            }
+            const rows = items.slice().reverse().map(item => {
+                const status = Number(item.status || 0);
+                const lat = item.latency_ms == null ? '-' : item.latency_ms + 'ms';
+                return '<tr>' +
+                    '<td>' + (item.method || '-') + '</td>' +
+                    '<td class="path">' + (item.path || '-') + '</td>' +
+                    '<td><span class="' + statusClass(status) + '">' + status + '</span></td>' +
+                    '<td>' + (item.target || '-') + '</td>' +
+                    '<td>' + lat + '</td>' +
+                    '<td>' + (item.ts ? ago(item.ts) : '-') + '</td>' +
+                    '</tr>';
+            }).join('');
+            content.className = '';
+            content.innerHTML = '<table><thead><tr><th>Method</th><th>Path</th><th>Status</th><th>Target</th><th>Latency</th><th>When</th></tr></thead><tbody>' + rows + '</tbody></table>';
+            meta.textContent = items.length + ' requests captured';
+        }
+        async function tick(){
+            try{
+                const resp = await fetch('/__devlinker/logs', {cache:'no-store'});
+                const data = await resp.json();
+                render(Array.isArray(data.items) ? data.items : []);
+            }catch(_){
+            }
+        }
+        tick();
+        setInterval(tick, 1500);
+    </script>
+</body>
+</html>"""
+        return HTMLResponse(html)
 
 
 def start_proxy(

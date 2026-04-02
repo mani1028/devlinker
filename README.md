@@ -2,6 +2,76 @@
 
 Dev Linker starts your local development stack and routes frontend and backend traffic through one proxy URL, with optional LAN and public sharing.
 
+## ⚡ Quick Start (2 Minutes)
+
+Install:
+
+```bash
+pip install devlinker
+```
+
+Run your apps:
+
+```bash
+# Backend (example)
+uvicorn main:app --reload
+
+# Frontend (example)
+npm run dev
+```
+
+Run DevLinker:
+
+```bash
+devlinker
+```
+
+Open:
+
+```text
+http://localhost:8001
+```
+
+Done ✅
+
+## 🧠 How DevLinker Works
+
+Request flow:
+
+```text
+Browser -> DevLinker Proxy -> Frontend or Backend
+```
+
+Routing rules:
+
+- / routes to frontend (React/Vite)
+- /api/* routes to backend (FastAPI/Flask/Node)
+
+DevLinker acts as a smart proxy and optional tunnel layer for local, LAN, and public development links.
+
+Architecture diagram:
+
+```mermaid
+flowchart LR
+     B[Browser / Mobile] --> P[DevLinker Proxy]
+     P --> F[Frontend Dev Server\nVite/React]
+     P --> A[Backend API\nFastAPI/Flask/Node]
+     P --> T[Optional Tunnel\nCloudflare/ngrok]
+```
+
+## 🎯 Use Cases
+
+- Test APIs and UI flows on mobile devices over WLAN
+- Share local work instantly with teammates using one public URL
+- Debug frontend-backend integration from a single entrypoint
+- Reduce CORS/preflight issues during development
+
+## 🖼️ Demo & Screenshots
+
+- Terminal startup output: add screenshot at docs/images/terminal-startup.png
+- Browser app via proxy: add screenshot at docs/images/browser-proxy.png
+- Public URL share demo: add screenshot at docs/images/public-url.png
+
 
 ## Features
 
@@ -16,6 +86,8 @@ Dev Linker starts your local development stack and routes frontend and backend t
 - 🌍 **Public Sharing:** Share your local dev environment instantly with `--url` (startup) or `devlinker share` (runtime, no restart).
 - 🔄 **Dynamic Tunnel Control:** `devlinker unshare` disables public tunnel at runtime.
 - 📡 **WLAN Sharing:** Prints LAN URL for same-network device access.
+- 🔒 **Secure Token Linking:** Optional token gate for LAN/public access with `DEVLINKER_LINK_TOKEN`.
+- 📊 **Browser API Logs Dashboard:** Open `/__devlinker/dashboard` for lightweight live API visibility.
 - 🧑‍💻 **Interactive CLI:** Modern, colorized, emoji-rich terminal UX for all commands.
 - 🧩 **Zero Config:** Works out-of-the-box for most FastAPI, Flask, Vite, and Docker projects.
 - 🧪 **Runtime Smoke Test:** Built-in test for end-to-end proxy validation.
@@ -49,6 +121,30 @@ If DevLinker helps you ship faster, consider supporting the project:
 - `devlinker --proxy-port 18000` — Use custom proxy port
 - `devlinker --debug` — Enable debug mode (turns on live API request logger)
 - `devlinker --version` — Show version
+
+Security token (optional):
+
+```bash
+set DEVLINKER_LINK_TOKEN=your-secret-token
+devlinker --url
+```
+
+When enabled, LAN/public requests must include one of:
+- query param `dl_token=...`
+- header `X-DevLinker-Token: ...`
+- header `Authorization: Bearer ...`
+
+Built-in API logs dashboard:
+
+```text
+http://localhost:<proxy-port>/__devlinker/dashboard
+```
+
+JSON stream endpoint used by the dashboard:
+
+```text
+http://localhost:<proxy-port>/__devlinker/logs
+```
 
 ## Project Structure
 
