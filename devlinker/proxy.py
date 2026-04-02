@@ -26,6 +26,7 @@ _printed_fixes = set()
 _printed_live_header = False
 LIVE_REQUEST_LOGGING_ENABLED = False
 MAX_RECENT_REQUESTS = 200
+PROXY_READY_EVENT = threading.Event()
 
 
 def _format_request_context(path: str, method: str | None, status: int, target: str) -> str:
@@ -175,6 +176,7 @@ def _apply_cors_headers(headers: Dict[str, str], request: Request) -> Dict[str, 
 async def _on_startup() -> None:
     global HTTP_CLIENT
     HTTP_CLIENT = httpx.AsyncClient(timeout=15.0, follow_redirects=False)
+    PROXY_READY_EVENT.set()
 
 
 @app.on_event("shutdown")
@@ -183,6 +185,7 @@ async def _on_shutdown() -> None:
     if HTTP_CLIENT is not None:
         await HTTP_CLIENT.aclose()
         HTTP_CLIENT = None
+    PROXY_READY_EVENT.clear()
 
 
 def _connection_header_tokens(headers: Dict[str, str]) -> set[str]:
@@ -720,9 +723,14 @@ def start_proxy(
     BACKEND = backend_port
     LIVE_REQUEST_LOGGING_ENABLED = enable_debug_logs
     _printed_live_header = False
+    PROXY_READY_EVENT.clear()
 
     thread = threading.Thread(
         target=lambda: uvicorn.run(app, host="0.0.0.0", port=proxy_port, log_level="warning"),
         daemon=True,
     )
     thread.start()
+
+
+def wait_for_proxy_startup(timeout: float = 5.0) -> bool:
+    return PROXY_READY_EVENT.wait(timeout)

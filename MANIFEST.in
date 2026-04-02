@@ -1,3 +1,2 @@
 include devlinker/devlinker_loader_instant.html
-include devlinker/devlinker_loader_minimal.html
 include devlinker/devlinker_loader_snippet.html

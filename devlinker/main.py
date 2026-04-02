@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - fallback when rich is unavailable
 
 from . import __version__
 from .detector import check_port, detect_ports, is_vite_port
-from .proxy import start_proxy
+from .proxy import start_proxy, wait_for_proxy_startup
 from .runner import detect_backend_port, start_servers
 from .tunnel import start_tunnel
 from .doctor import doctor
@@ -43,6 +43,7 @@ from .share import share, unshare
 from .config import load_config
 from .inspect import inspect
 from .monitor import monitor
+from .global_state import STATE
 
 SUPPORT_UPI_ID = "devlinker@upi"
 SUPPORT_UPI_LINK = "upi://pay?pa=devlinker@upi&pn=DevLinker&cu=INR&tn=Support%20DevLinker%20Project%20🚀"
@@ -602,6 +603,7 @@ def _run_proxy(
         )
 
     proxy_port = _select_proxy_port(proxy_port)
+    STATE["proxy_port"] = proxy_port
     _write_frontend_api_env(proxy_port)
 
     if not live_status:
@@ -619,8 +621,10 @@ def _run_proxy(
         enable_debug_logs=debug,
     )
 
-    # Allow proxy thread to bind before opening tunnel.
-    time.sleep(1)
+    if not wait_for_proxy_startup(timeout=5.0):
+        raise click.ClickException(
+            f"Proxy failed to start on port {proxy_port}. Check whether the port is already in use."
+        )
 
     if live_status:
         live_status.update("Proxy", f"✔ Active ({proxy_port})", style="green")

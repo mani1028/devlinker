@@ -110,6 +110,7 @@ If DevLinker helps you ship faster, consider supporting the project:
 - `devlinker support` — Show UPI support QR code in terminal
 - `devlinker --url` — Start with public tunnel (Cloudflare/ngrok)
 - `devlinker share` — Enable public tunnel at runtime (no restart)
+- `devlinker share --proxy-port 18000` — Enable public tunnel for a custom proxy port
 - `devlinker unshare` — Disable public tunnel at runtime
 - `devlinker doctor` — Diagnose issues, see categorized problems and fixes
 - `devlinker fix` — Auto-fix common issues (env, API paths, config)
@@ -258,14 +259,16 @@ devlinker --docker
 
 ## Tunnel and Sharing Modes
 
-By default, DevLinker starts **fast local proxy only** (no tunnel). To enable a public tunnel, use the `--url` flag:
+By default, DevLinker starts **fast local proxy only** (no tunnel). It prints a LAN URL when it can detect a local network interface, and you can share that link with devices on the same Wi-Fi/LAN.
+
+For access from another network, start with a public tunnel using the `--url` flag:
 
 
 ```bash
 devlinker --url
 ```
 
-This will start the proxy and open a public tunnel (Cloudflare or ngrok). The output will show:
+This starts the proxy and opens a public tunnel (Cloudflare or ngrok). The output will show:
 
 ```text
 🌍 Enabling public tunnel...
@@ -275,6 +278,20 @@ This will start the proxy and open a public tunnel (Cloudflare or ngrok). The ou
 ℹ Tip: Ctrl+Click to open link
 ℹ Share this link with collaborators.
 ```
+
+If you already started DevLinker and want to turn on sharing without restarting, use:
+
+```bash
+devlinker share
+```
+
+If you use a custom proxy port, pass it explicitly:
+
+```bash
+devlinker share --proxy-port 18000
+```
+
+If your friend is on the same Wi-Fi/LAN, use the printed LAN URL like `http://192.168.x.x:<proxy-port>`. If they are outside your network, use the public tunnel URL instead.
 
 To force tunnel off (even if --url is passed):
 
