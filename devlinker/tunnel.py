@@ -20,8 +20,11 @@ def stop_tunnel():
     _CLOUDFLARED_PROCESSES.clear()
 
 import re
+import queue
 import shutil
 import subprocess
+import threading
+import time
 from subprocess import TimeoutExpired
 
 from pyngrok import ngrok
@@ -56,33 +59,53 @@ def _try_cloudflare(proxy_port: int, startup_timeout: float = 12.0) -> str | Non
         text=True,
     )
 
+    # Read cloudflared logs incrementally so we can return as soon as the URL appears.
+    output_queue: queue.Queue[str | None] = queue.Queue()
+
+    def _reader() -> None:
+        stream = process.stdout
+        if stream is None:
+            output_queue.put(None)
+            return
+        try:
+            for line in stream:
+                output_queue.put(line)
+        finally:
+            output_queue.put(None)
+
+    threading.Thread(target=_reader, daemon=True).start()
+
     output = ""
-    try:
-        stdout, _ = process.communicate(timeout=startup_timeout)
-        output = stdout or ""
-    except TimeoutExpired as exc:
-        # exc.stdout and exc.stderr may be str, bytes, bytearray, or memoryview; convert to str
-        def to_str(val):
-            if isinstance(val, str):
-                return val
-            if isinstance(val, (bytes, bytearray)):
-                return val.decode(errors="replace")
-            if isinstance(val, memoryview):
-                return val.tobytes().decode(errors="replace")
-            return str(val) if val is not None else ""
-        exc_stdout = to_str(exc.stdout)
-        exc_stderr = to_str(exc.stderr)
-        output = exc_stdout + exc_stderr
+    deadline = time.monotonic() + max(startup_timeout, 0.1)
+    stream_closed = False
+    while time.monotonic() < deadline:
+        try:
+            chunk = output_queue.get(timeout=0.1)
+        except queue.Empty:
+            chunk = ""
 
-    if not isinstance(output, str):
-        output = str(output)
+        if chunk is None:
+            stream_closed = True
+            break
+        if chunk:
+            output += chunk
+            url = _extract_trycloudflare_url(output)
+            if url:
+                _CLOUDFLARED_PROCESSES.append(process)
+                return url
 
+        if process.poll() is not None and output_queue.empty():
+            break
+
+    # One final parse pass before treating startup as failed.
     url = _extract_trycloudflare_url(output)
     if url:
         _CLOUDFLARED_PROCESSES.append(process)
         return url
 
-    process.terminate()
+    if not stream_closed and process.poll() is None:
+        process.terminate()
+
     return None
 
 

@@ -409,8 +409,8 @@ def _wait_for_readiness(
     label: str,
     port: int,
     checker,
-    retries: int = 15,
-    delay_seconds: float = 1.0,
+    retries: int = 20,
+    delay_seconds: float = 0.5,
 ) -> bool:
     _ui_status("⏳", f"Waiting for {label} ({port})...", style="cyan")
     for attempt in range(1, retries + 1):
@@ -428,8 +428,8 @@ def _wait_for_readiness_live(
     port: int,
     checker,
     live_status: _LiveStatus,
-    retries: int = 15,
-    delay_seconds: float = 1.0,
+    retries: int = 20,
+    delay_seconds: float = 0.5,
 ) -> bool:
     live_status.update(label, f"⏳ Waiting ({port})...", style="cyan")
     for attempt in range(1, retries + 1):

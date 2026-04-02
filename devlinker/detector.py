@@ -15,7 +15,7 @@ DEFAULT_BACKEND_PROBE_PATHS = (
 
 def check_port(
     port: int,
-    timeout: float = 1.0,
+    timeout: float = 0.4,
     probe_paths: Iterable[str] = DEFAULT_BACKEND_PROBE_PATHS,
 ) -> bool:
     """Return True when an HTTP service is reachable on localhost:port.
@@ -53,7 +53,7 @@ def check_port(
     return False
 
 
-def is_vite_port(port: int, timeout: float = 1.0) -> bool:
+def is_vite_port(port: int, timeout: float = 0.4) -> bool:
     """Return True when port looks like a Vite dev server."""
     for host in ("localhost", "127.0.0.1"):
         try:
@@ -95,8 +95,8 @@ def _ordered_unique_ports(*port_groups: Iterable[int]) -> list[int]:
 def detect_ports(
     frontend: Optional[int] = None,
     backend: Optional[int] = None,
-    retries: int = 12,
-    delay_seconds: float = 1.0,
+    retries: int = 16,
+    delay_seconds: float = 0.5,
 ) -> Tuple[Optional[int], Optional[int]]:
     """Detect frontend and backend ports with retry support for slow startups."""
     frontend_ports = _ordered_unique_ports(

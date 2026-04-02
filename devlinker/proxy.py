@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 from typing import Dict, Optional
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import httpx
 import uvicorn
@@ -67,6 +68,19 @@ def _extract_presented_token(headers: Dict[str, str], query_params) -> str | Non
     query_token = query_params.get("dl_token")
     if query_token:
         return query_token
+
+    # WebSocket handshakes may not include dl_token in the WS URL, but the
+    # browser Referer usually contains the original page URL query string.
+    referer = headers.get("referer", "").strip()
+    if referer:
+        try:
+            referer_query = dict(parse_qsl(urlsplit(referer).query, keep_blank_values=True))
+            referer_token = (referer_query.get("dl_token") or "").strip()
+            if referer_token:
+                return referer_token
+        except ValueError:
+            pass
+
     direct_header = headers.get("x-devlinker-token", "").strip()
     if direct_header:
         return direct_header
@@ -213,6 +227,7 @@ def _filter_websocket_headers(incoming: Dict[str, str]) -> Dict[str, str]:
     connection_tokens = _connection_header_tokens(incoming)
     excluded = HOP_BY_HOP_HEADERS | connection_tokens | {
         "host",
+        "origin",
         "sec-websocket-key",
         "sec-websocket-version",
         "sec-websocket-extensions",
@@ -725,10 +740,12 @@ def start_proxy(
     _printed_live_header = False
     PROXY_READY_EVENT.clear()
 
-    thread = threading.Thread(
-        target=lambda: uvicorn.run(app, host="0.0.0.0", port=proxy_port, log_level="warning"),
-        daemon=True,
-    )
+    def _run_server() -> None:
+        if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        uvicorn.run(app, host="0.0.0.0", port=proxy_port, log_level="warning")
+
+    thread = threading.Thread(target=_run_server, daemon=True)
     thread.start()
 
 
