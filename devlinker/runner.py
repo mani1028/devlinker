@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import atexit
 import os
 import re
 import shutil
@@ -27,6 +28,16 @@ except ImportError:  # pragma: no cover - fallback when rich is unavailable
 
 _RICH_AVAILABLE = Console is not None
 _CONSOLE = Console() if Console is not None else None
+_RUNNING_PROCESSES: list[subprocess.Popen[Any]] = []
+_DOCKER_COMPOSE_PROJECT_DIRS: set[Path] = set()
+_DETECTED_BACKEND_HOST_HINTS: dict[int, tuple[str, ...]] = {}
+_COMMON_PYTHON_ENTRY_FILES: tuple[str, ...] = (
+    "app.py",
+    "main.py",
+    "server.py",
+    "run.py",
+    "manage.py",
+)
 
 
 def _log(level: str, message: str) -> None:
@@ -61,6 +72,53 @@ def _log(level: str, message: str) -> None:
 def _debug_log(enabled: bool, message: str) -> None:
     if enabled:
         print(f"[DEBUG] {message}")
+
+
+def _track_process(proc: subprocess.Popen[Any]) -> None:
+    _RUNNING_PROCESSES.append(proc)
+
+
+@atexit.register
+def _cleanup_running_processes() -> None:
+    for proc in list(_RUNNING_PROCESSES):
+        try:
+            if proc.poll() is None:
+                if sys.platform.startswith("win"):
+                    # Kill the full process tree so npm/cmd wrappers do not leave child servers running.
+                    subprocess.run(
+                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                else:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+        except Exception:
+            pass
+
+    docker_binary = _resolve_command("docker")
+    for project_dir in list(_DOCKER_COMPOSE_PROJECT_DIRS):
+        try:
+            compose_yml = project_dir / "docker-compose.yml"
+            compose_yaml = project_dir / "compose.yml"
+            if not (compose_yml.exists() or compose_yaml.exists()):
+                continue
+            subprocess.run(  # noqa: S603
+                [docker_binary, "compose", "down"],
+                cwd=project_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    _RUNNING_PROCESSES.clear()
+    _DOCKER_COMPOSE_PROJECT_DIRS.clear()
 
 
 def is_port_open(port: int) -> bool:
@@ -370,6 +428,16 @@ def _wait_for_port(port: int, retries: int = 5, delay_seconds: float = 1.0, debu
     return False
 
 
+def _set_backend_host_hints(port: int, hosts: tuple[str, ...]) -> None:
+    clean_hosts = tuple(host for host in hosts if host)
+    if clean_hosts:
+        _DETECTED_BACKEND_HOST_HINTS[port] = clean_hosts
+
+
+def get_backend_host_hints(port: int) -> tuple[str, ...]:
+    return _DETECTED_BACKEND_HOST_HINTS.get(port, tuple())
+
+
 def detect_backend_port(
     default_port: int = 5000,
     override_port: int | None = None,
@@ -380,6 +448,7 @@ def detect_backend_port(
 
     if override_port is not None:
         _log("info", f"Using backend port override: {override_port}")
+        _set_backend_host_hints(override_port, ("127.0.0.1", "localhost", "::1"))
         _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
         return override_port
 
@@ -406,10 +475,12 @@ def detect_backend_port(
                 _log("ok", f"Backend detected (Docker: {container_name}) -> port {chosen_port}")
                 if container_port is not None:
                     _debug_log(debug, f"Selected Docker container port: {container_port}")
+                _set_backend_host_hints(chosen_port, ("127.0.0.1", "localhost", "host.docker.internal", "::1"))
                 _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
                 return chosen_port
 
             _log("ok", f"Backend detected (Local) -> port {chosen_port}")
+            _set_backend_host_hints(chosen_port, ("127.0.0.1", "localhost", "::1"))
             _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
             return chosen_port
 
@@ -423,11 +494,13 @@ def detect_backend_port(
         )
         _debug_log(debug, "Using local-first priority (interactive selection disabled)")
         _log("ok", f"Backend detected (Local) -> port {default_port}")
+        _set_backend_host_hints(default_port, ("127.0.0.1", "localhost", "::1"))
         _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
         return default_port
 
     if local_open:
         _log("ok", f"Backend detected (Local) -> port {default_port}")
+        _set_backend_host_hints(default_port, ("127.0.0.1", "localhost", "::1"))
         _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
         return default_port
 
@@ -439,6 +512,7 @@ def detect_backend_port(
         if _wait_for_port(docker_port, retries=5, delay_seconds=1.0, debug=debug):
             _log("ok", f"Backend detected (Docker: {container_name}) -> port {docker_port}")
             _debug_log(debug, f"Selected Docker container port: {container_port}")
+            _set_backend_host_hints(docker_port, ("127.0.0.1", "localhost", "host.docker.internal", "::1"))
             _log("info", f"Backend detected in {time.perf_counter() - started:.1f}s")
             return docker_port
         _log("warn", f"Docker mapped port {docker_port} found but backend is not ready yet")
@@ -467,8 +541,22 @@ def _detect_backend_mode(backend_path: Path) -> str | None:
         return "docker"
     if (backend_path / "package.json").exists():
         return "node"
-    if (backend_path / "requirements.txt").exists() or (backend_path / "app.py").exists():
+    if (backend_path / "requirements.txt").exists() or any((backend_path / name).exists() for name in _COMMON_PYTHON_ENTRY_FILES):
         return "python"
+    return None
+
+
+def find_python_entry(backend_path: Path, configured_entry: str | None = None) -> str | None:
+    candidates: list[str] = []
+    if configured_entry:
+        configured = configured_entry.strip()
+        if configured:
+            candidates.append(configured)
+    candidates.extend(name for name in _COMMON_PYTHON_ENTRY_FILES if name not in candidates)
+
+    for candidate in candidates:
+        if (backend_path / candidate).exists():
+            return candidate
     return None
 
 
@@ -504,7 +592,9 @@ def _resolve_command(binary: str) -> str:
 
 def _start_backend_docker_compose(backend_path: Path) -> None:
     docker = _resolve_command("docker")
-    subprocess.Popen([docker, "compose", "up", "--build"], cwd=backend_path)  # noqa: S603
+    proc = subprocess.Popen([docker, "compose", "up", "--build"], cwd=backend_path)  # noqa: S603
+    _track_process(proc)
+    _DOCKER_COMPOSE_PROJECT_DIRS.add(backend_path)
 
 
 def _start_backend_docker(backend_path: Path) -> None:
@@ -515,7 +605,8 @@ def _start_backend_docker(backend_path: Path) -> None:
         cwd=backend_path,
         check=True,
     )
-    subprocess.Popen([docker, "run", "--rm", "-p", "5000:5000", image_name])  # noqa: S603
+    proc = subprocess.Popen([docker, "run", "--rm", "-p", "5000:5000", image_name])  # noqa: S603
+    _track_process(proc)
 
 
 def _start_backend_node(backend_path: Path) -> None:
@@ -526,22 +617,25 @@ def _start_backend_node(backend_path: Path) -> None:
         cmd = ["npm", "start"]
 
     cmd[0] = _resolve_command(cmd[0])
-    subprocess.Popen(cmd, cwd=backend_path)  # noqa: S603
+    proc = subprocess.Popen(cmd, cwd=backend_path)  # noqa: S603
+    _track_process(proc)
 
 
-def _start_backend_python(backend_path: Path) -> None:
-    app_py = backend_path / "app.py"
-    if not app_py.exists():
-        _log("warn", "Python backend detected, but backend/app.py is missing.")
+def _start_backend_python(backend_path: Path, configured_entry: str | None = None) -> None:
+    entry_file = find_python_entry(backend_path, configured_entry=configured_entry)
+    if not entry_file:
+        _log("warn", "Python backend detected, but no entry point was found (expected app.py/main.py/server.py/run.py/manage.py).")
         return
 
-    subprocess.Popen([sys.executable, "app.py"], cwd=backend_path)  # noqa: S603
+    proc = subprocess.Popen([sys.executable, entry_file], cwd=backend_path)  # noqa: S603
+    _track_process(proc)
 
 
 def start_servers(
     frontend_dir: str = "frontend",
     backend_dir: str = "backend",
     auto_start_docker: bool = False,
+    backend_entry: str | None = None,
 ) -> None:
     """Launch frontend/backend when their expected directories exist."""
     frontend_path = Path(frontend_dir)
@@ -558,7 +652,8 @@ def start_servers(
             cmd[0] = _resolve_command(cmd[0])
             env = os.environ.copy()
             env["ONELINK"] = "1"
-            subprocess.Popen(cmd, cwd=frontend_path, env=env)  # noqa: S603
+            proc = subprocess.Popen(cmd, cwd=frontend_path, env=env)  # noqa: S603
+            _track_process(proc)
             _log("ok", f"Frontend launch requested: {' '.join(cmd)}")
     else:
         if frontend_running:
@@ -609,7 +704,7 @@ def start_servers(
             _log("ok", "Node backend launch requested.")
         elif backend_mode == "python":
             _log("info", "Python backend detected; starting...")
-            _start_backend_python(backend_path)
+            _start_backend_python(backend_path, configured_entry=backend_entry)
             _log("ok", "Python backend launch requested.")
         else:
             _log("warn", "No supported backend runtime detected; skipping backend launch.")

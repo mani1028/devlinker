@@ -79,12 +79,11 @@ flowchart LR
 - 🔍 **Auto Detection:** Detects frontend/backend ports, runtime, Docker containers, and Vite servers automatically.
 - 📡 **Debug Request Logger:** Live API traffic lines (method, path, status, latency) only in debug mode.
 - 🧩 **Backend-Only Mode:** If no frontend is detected, DevLinker still runs and forwards all traffic to backend.
-- 🔁 **Auto API URL Sync:** Updates `frontend/.env.local` with `VITE_API_URL=http://localhost:<proxy-port>` using a managed block.
+- 🔁 **Runtime API URL Injection:** Injects runtime browser patching so hardcoded localhost API calls are rewritten to the active proxy/tunnel origin.
 - 🛡️ **Proxy CORS + Preflight:** Handles common CORS/preflight behavior at the proxy layer, including credential-safe Origin handling.
 - 🧠 **Smart Detection & Doctor:** Real-time request analysis, backend intelligence, log analyzer, and `devlinker doctor` for instant diagnostics.
 - 🛡️ **Auto-Fix Engine:** `devlinker fix` applies safe fixes (like VITE_API_URL) and suggests code changes.
-- 🌍 **Public Sharing:** Share your local dev environment instantly with `--url` (startup) or `devlinker share` (runtime, no restart).
-- 🔄 **Dynamic Tunnel Control:** `devlinker unshare` disables public tunnel at runtime.
+- 🌍 **Public Sharing:** Share your local dev environment instantly with the `--url` flag at startup.
 - 📡 **WLAN Sharing:** Prints LAN URL for same-network device access.
 - 🔒 **Secure Token Linking:** Optional token gate for LAN/public access with `DEVLINKER_LINK_TOKEN`.
 - 📊 **Browser API Logs Dashboard:** Open `/__devlinker/dashboard` for lightweight live API visibility.
@@ -109,9 +108,6 @@ If DevLinker helps you ship faster, consider supporting the project:
 - `devlinker` — Start proxy (local only, fast)
 - `devlinker support` — Show UPI support QR code in terminal
 - `devlinker --url` — Start with public tunnel (Cloudflare/ngrok)
-- `devlinker share` — Enable public tunnel at runtime (no restart)
-- `devlinker share --proxy-port 18000` — Enable public tunnel for a custom proxy port
-- `devlinker unshare` — Disable public tunnel at runtime
 - `devlinker doctor` — Diagnose issues, see categorized problems and fixes
 - `devlinker fix` — Auto-fix common issues (env, API paths, config)
 - `devlinker --frontend 5173 --backend 5000` — Override detected ports
@@ -199,7 +195,7 @@ Typical startup output (TTY with Rich available):
 
 ```text
 ╭─────────────────────────────╮
-│ ♾️  DevLinker v1.4.1        │
+│ ♾️  DevLinker v1.4.5        │
 │ Smart Local Dev Environment │
 ╰─────────────────────────────╯
 
@@ -277,18 +273,6 @@ This starts the proxy and opens a public tunnel (Cloudflare or ngrok). The outpu
      https://xxxx.trycloudflare.com
 ℹ Tip: Ctrl+Click to open link
 ℹ Share this link with collaborators.
-```
-
-If you already started DevLinker and want to turn on sharing without restarting, use:
-
-```bash
-devlinker share
-```
-
-If you use a custom proxy port, pass it explicitly:
-
-```bash
-devlinker share --proxy-port 18000
 ```
 
 If your friend is on the same Wi-Fi/LAN, use the printed LAN URL like `http://192.168.x.x:<proxy-port>`. If they are outside your network, use the public tunnel URL instead.
@@ -373,15 +357,7 @@ fetch("/api/endpoint")
 
 Do not hardcode backend host URLs in frontend code.
 
-DevLinker also writes/updates a managed block in `frontend/.env.local`:
-
-```env
-# devlinker-managed:start
-VITE_API_URL=http://localhost:8001
-# devlinker-managed:end
-```
-
-This keeps frontend API calls consistently routed through the proxy.
+DevLinker injects runtime config and request patching in proxied HTML so frontend API calls are routed through the active proxy/tunnel origin without requiring source edits or frontend rebuilds.
 
 Use the proxy URL as your single entry point during development:
 
@@ -406,7 +382,16 @@ frontend: 5173
 backend: 5000
 proxy_port: 8001
 tunnel: false
+backend_entry: main.py
+api_prefix: /api
+strip_prefix: true
 ```
+
+Config key notes:
+
+- `backend_entry`: Optional Python backend startup file override (for example `main.py`)
+- `api_prefix`: Prefix DevLinker treats as API traffic (default: `/api`)
+- `strip_prefix`: When `true`, strips configured `api_prefix` before forwarding to backend
 
 ## Backend Auto-Detection
 
@@ -418,6 +403,16 @@ Backend port detection runs in this order:
 4. Otherwise rank containers by likely backend identity (name hints like backend/api plus project-name hints)
 5. Use the best mapped host port automatically, even when internal port is not 5000
 6. If nothing is found, print next-step guidance and exit
+
+Python backend entry detection supports automatic discovery of:
+
+- `app.py`
+- `main.py`
+- `server.py`
+- `run.py`
+- `manage.py`
+
+If `backend_entry` is set in config, DevLinker uses it first and falls back to the discovery list.
 
 If Docker SDK is unavailable, Dev Linker falls back to Docker CLI parsing as a compatibility path.
 
@@ -444,7 +439,7 @@ Dev Linker checks backend runtime in this order:
 1. Docker Compose (`backend/docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`)
 2. Docker (`backend/Dockerfile`)
 3. Node (`backend/package.json`)
-4. Python (`backend/requirements.txt` or `backend/app.py`)
+4. Python (`backend/requirements.txt` or discovered entry file such as `app.py` / `main.py`)
 
 Backend startup commands:
 
@@ -452,7 +447,7 @@ Backend startup commands:
 - Dockerfile (default): manual run `docker build -t devlinker-backend .` then `docker run --rm -p 5000:5000 devlinker-backend`
 - Docker Compose/Dockerfile with `--docker`: Dev Linker runs those Docker commands for you
 - Node: `npm run dev` (or `npm start` when `dev` is missing)
-- Python: `python app.py`
+- Python: `python <discovered-entry>` (auto: `app.py`, `main.py`, `server.py`, `run.py`, `manage.py`, or configured `backend_entry`)
 
 For containerized Flask backends, ensure:
 
@@ -461,7 +456,7 @@ For containerized Flask backends, ensure:
 
 ## Notes
 
-- runner.py expects frontend project in frontend and Python app in backend/app.py.
+- runner.py expects frontend project in `frontend/` and backend project in `backend/`, with automatic Python entry discovery.
 - If those paths do not exist, Dev Linker skips launch and only tries to detect already-running services.
 - If frontend is missing but backend is available, DevLinker continues in backend-only mode.
 - Tunnel selection order is: cloudflared (TryCloudflare), then ngrok.

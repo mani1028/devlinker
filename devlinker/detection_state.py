@@ -13,6 +13,8 @@ class DetectionState:
             return False  # already shown
         else:
             self.counts[key] = 1
+            self.levels[issue] = level
+            self.categories.setdefault(category, []).append(issue)
             self.issues.append({
                 "issue": issue,
                 "level": level,
@@ -61,6 +63,43 @@ class DetectionState:
                 print(f"⚠️  {issue} (x{count})")
             else:
                 print(f"💡 {issue} (x{count})")
+
+    def get_issue_records(self):
+        records = []
+        for issue in self.issues:
+            issue_text = issue["issue"]
+            records.append(
+                {
+                    "issue": issue_text,
+                    "level": issue["level"],
+                    "category": issue["category"],
+                    "count": self.get_count(issue_text),
+                }
+            )
+        return records
+
+    def get_category_statuses(self):
+        statuses = {}
+        for category, issues in self.categories.items():
+            if not issues:
+                statuses[category] = "OK"
+                continue
+            has_high = any(self.levels.get(issue, "MEDIUM") == "HIGH" for issue in issues)
+            has_medium = any(self.levels.get(issue, "MEDIUM") == "MEDIUM" for issue in issues)
+            if has_high:
+                statuses[category] = "HIGH"
+            elif has_medium:
+                statuses[category] = "MEDIUM"
+            else:
+                statuses[category] = "LOW"
+        return statuses
+
+    def snapshot(self):
+        return {
+            "total_issues": len(self.issues),
+            "items": self.get_issue_records(),
+            "categories": self.get_category_statuses(),
+        }
 
 # Singleton instance
 state = DetectionState()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import atexit
+
 def stop_tunnel():
     """Stop all active tunnels (Cloudflare/ngrok)."""
     # Stop ngrok tunnels
@@ -8,6 +10,7 @@ def stop_tunnel():
             public_url = getattr(tunnel, "public_url", None)
             if public_url is not None:
                 ngrok.disconnect(public_url)
+        ngrok.kill()
     except Exception:
         pass
     # Stop cloudflared processes
@@ -32,6 +35,8 @@ from pyngrok.exception import PyngrokError
 
 _TRYCLOUDFLARE_URL = re.compile(r"https://[a-z0-9.-]+\.trycloudflare\.com", re.IGNORECASE)
 _CLOUDFLARED_PROCESSES: list[subprocess.Popen[str]] = []
+
+atexit.register(stop_tunnel)
 
 
 def _extract_trycloudflare_url(output: str) -> str | None:
@@ -153,8 +158,8 @@ def _start_ngrok_tunnel(proxy_port: int) -> str | None:
         raise RuntimeError(f"Failed to start ngrok tunnel: {exc}") from exc
 
 
-def start_tunnel(proxy_port: int = 8000) -> tuple[str, str]:
-    """Open a public tunnel and return (provider, url)."""
+def start_tunnel(proxy_port: int) -> tuple[str, str]:
+    """Open a public tunnel to the unified DevLinker proxy and return (provider, url)."""
     cloudflare_url = _try_cloudflare(proxy_port)
     if cloudflare_url is not None:
         return "cloudflare", cloudflare_url

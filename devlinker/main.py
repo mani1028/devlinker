@@ -34,16 +34,13 @@ except ImportError:  # pragma: no cover - fallback when rich is unavailable
 from . import __version__
 from .detector import check_port, detect_ports, is_vite_port
 from .proxy import start_proxy, wait_for_proxy_startup
-from .runner import detect_backend_port, start_servers
+from .runner import detect_backend_port, get_backend_host_hints, start_servers
 from .tunnel import start_tunnel
 from .doctor import doctor
 from .fix import fix
-
-from .share import share, unshare
 from .config import load_config
 from .inspect import inspect
 from .monitor import monitor
-from .global_state import STATE
 
 SUPPORT_UPI_ID = "devlinker@upi"
 SUPPORT_UPI_LINK = "upi://pay?pa=devlinker@upi&pn=DevLinker&cu=INR&tn=Support%20DevLinker%20Project%20🚀"
@@ -475,6 +472,13 @@ def _wait_for_readiness_live(
     show_default=True,
     help="Show WLAN sharing URL for devices on the same network.",
 )
+@click.option(
+    "--universal/--no-universal",
+    "universal_mode",
+    default=True,
+    show_default=True,
+    help="Force localhost URL rewriting and proxy-safe API behavior for any device.",
+)
 @click.option("--debug", is_flag=True, help="Enable debug mode and live API request logging.")
 @click.pass_context
 def main(
@@ -487,6 +491,7 @@ def main(
     no_tunnel: bool,
     interactive_backend: bool,
     lan_enabled: bool,
+    universal_mode: bool,
     debug: bool,
 ) -> None:
     if ctx.invoked_subcommand is not None:
@@ -501,6 +506,7 @@ def main(
         no_tunnel,
         interactive_backend,
         lan_enabled,
+        universal_mode,
         debug,
     )
 
@@ -514,6 +520,7 @@ def _run_proxy(
     no_tunnel: bool,
     interactive_backend: bool,
     lan_enabled: bool,
+    universal_mode: bool,
     debug: bool,
 ) -> None:
     # Load config file if present
@@ -527,9 +534,9 @@ def _run_proxy(
         proxy_port = config["proxy_port"]
     if not url and config.get("tunnel") is True:
         url = True
-    if config.get("api_prefix"):
-        # Optionally pass api_prefix to proxy if needed in future
-        pass
+    configured_api_prefix = config.get("api_prefix", "/api")
+    strip_prefix = bool(config.get("strip_prefix", False))
+    backend_entry = config.get("backend_entry")
 
     started = time.perf_counter()
     _print_banner()
@@ -541,7 +548,7 @@ def _run_proxy(
         live_status = _LiveStatus(_CONSOLE)
         live_status.start()
 
-    start_servers(auto_start_docker=auto_start_docker)
+    start_servers(auto_start_docker=auto_start_docker, backend_entry=backend_entry)
 
     backend_port = detect_backend_port(
         default_port=5000,
@@ -603,8 +610,6 @@ def _run_proxy(
         )
 
     proxy_port = _select_proxy_port(proxy_port)
-    STATE["proxy_port"] = proxy_port
-    _write_frontend_api_env(proxy_port)
 
     if not live_status:
         frontend_status = str(frontend_port) if frontend_port is not None else "none"
@@ -619,12 +624,21 @@ def _run_proxy(
         backend_port,
         proxy_port=proxy_port,
         enable_debug_logs=debug,
+        universal_mode=universal_mode,
+        api_prefix=configured_api_prefix,
+        strip_prefix=strip_prefix,
+        preferred_upstream_hosts=get_backend_host_hints(backend_port),
     )
 
     if not wait_for_proxy_startup(timeout=5.0):
         raise click.ClickException(
             f"Proxy failed to start on port {proxy_port}. Check whether the port is already in use."
         )
+
+    try:
+        webbrowser.open(f"http://localhost:{proxy_port}")
+    except Exception:
+        pass
 
     if live_status:
         live_status.update("Proxy", f"✔ Active ({proxy_port})", style="green")
@@ -658,6 +672,10 @@ def _run_proxy(
     if not live_status:
         _ui_status("✔", f"Proxy ready: http://localhost:{proxy_port}", style="green")
         _ui_status("ℹ", f"Use http://localhost:{proxy_port} as the single app entry point.", style="blue")
+        if universal_mode:
+            _ui_status("✔", "Universal mode ON: localhost API calls are auto-rewritten for shared links.", style="green")
+        else:
+            _ui_status("⚠", "Universal mode OFF: hardcoded localhost calls may fail on other devices.", style="yellow")
         if debug:
             _ui_status("🛠", "Debug mode enabled: live API request logger is ON", style="magenta")
 
@@ -719,8 +737,6 @@ def support(open_link: bool) -> None:
 
 main.add_command(doctor)
 main.add_command(fix)
-main.add_command(share)
-main.add_command(unshare)
 main.add_command(inspect)
 main.add_command(monitor)
 main.add_command(support)
