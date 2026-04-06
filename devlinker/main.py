@@ -420,6 +420,13 @@ def _wait_for_readiness(
     return False
 
 
+def _should_enable_tunnel(url: bool, no_tunnel: bool) -> bool:
+    """Public tunnels are opt-in and only enabled with --url unless explicitly disabled."""
+    if no_tunnel:
+        return False
+    return bool(url)
+
+
 def _wait_for_readiness_live(
     label: str,
     port: int,
@@ -532,8 +539,6 @@ def _run_proxy(
         backend_port_override = config.get("backend")
     if proxy_port == 8000 and config.get("proxy_port"):
         proxy_port = config["proxy_port"]
-    if not url and config.get("tunnel") is True:
-        url = True
     configured_api_prefix = config.get("api_prefix", "/api")
     strip_prefix = bool(config.get("strip_prefix", False))
     backend_entry = config.get("backend_entry")
@@ -680,11 +685,7 @@ def _run_proxy(
             _ui_status("🛠", "Debug mode enabled: live API request logger is ON", style="magenta")
 
     warning_free_url: str | None = None
-    enable_tunnel = False
-    if url:
-        enable_tunnel = True
-    if no_tunnel:
-        enable_tunnel = False
+    enable_tunnel = _should_enable_tunnel(url=url, no_tunnel=no_tunnel)
 
     if enable_tunnel:
         try:

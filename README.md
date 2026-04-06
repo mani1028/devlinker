@@ -112,7 +112,7 @@ If DevLinker helps you ship faster, consider supporting the project:
 - `devlinker fix` — Auto-fix common issues (env, API paths, config)
 - `devlinker --frontend 5173 --backend 5000` — Override detected ports
 - `devlinker --docker` — Auto-start Docker backend
-- `devlinker --no-tunnel` — Force local-only mode
+- `devlinker --no-tunnel` — Explicitly force local/WLAN-only mode (no public tunnel)
 - `devlinker --no-lan` — Hide WLAN sharing URL
 - `devlinker --interactive-backend` — Prompt to choose backend if multiple found
 - `devlinker --proxy-port 18000` — Use custom proxy port
@@ -257,6 +257,20 @@ devlinker --docker
 
 By default, DevLinker starts **fast local proxy only** (no tunnel). It prints a LAN URL when it can detect a local network interface, and you can share that link with devices on the same Wi-Fi/LAN.
 
+LAN-only quick start:
+
+```bash
+devlinker
+```
+
+You can also pass `--no-tunnel` to explicitly enforce no public tunnel startup:
+
+```bash
+devlinker --no-tunnel
+```
+
+`--no-tunnel` does **not** disable frontend/backend linking. DevLinker still starts the local proxy and routes frontend + backend through the same local entry URL.
+
 For access from another network, start with a public tunnel using the `--url` flag:
 
 
@@ -277,20 +291,30 @@ This starts the proxy and opens a public tunnel (Cloudflare or ngrok). The outpu
 
 If your friend is on the same Wi-Fi/LAN, use the printed LAN URL like `http://192.168.x.x:<proxy-port>`. If they are outside your network, use the public tunnel URL instead.
 
-To force tunnel off (even if --url is passed):
+To force tunnel off (even if `--url` is passed):
 
 ```bash
 devlinker --no-tunnel
 ```
 
-When running without `--url`, you’ll see:
+When running without `--url`, you’ll see local/WLAN output with public disabled:
 
 ```text
-⚡ Skipping public tunnel (use --url to enable)
-
-💡 Need to share outside network?
-👉 Run: devlinker --url
+Proxy:    http://localhost:8000
+WLAN:     http://192.168.1.5:8000
+Public:   disabled (use --url)
 ```
+
+WLAN usage notes:
+
+- `localhost` works only on the machine running DevLinker.
+- Use the printed WLAN URL on phones/laptops connected to the same Wi-Fi/LAN.
+
+WLAN troubleshooting checklist:
+
+1. Ensure both devices are on the same Wi-Fi/subnet.
+2. Allow Python/DevLinker through firewall prompts (Private networks).
+3. Keep Universal Mode enabled (default) so localhost API calls are rewritten safely for LAN/public links.
 
 Disable WLAN URL output:
 
@@ -381,7 +405,6 @@ Example:
 frontend: 5173
 backend: 5000
 proxy_port: 8001
-tunnel: false
 backend_entry: main.py
 api_prefix: /api
 strip_prefix: true
@@ -392,6 +415,7 @@ Config key notes:
 - `backend_entry`: Optional Python backend startup file override (for example `main.py`)
 - `api_prefix`: Prefix DevLinker treats as API traffic (default: `/api`)
 - `strip_prefix`: When `true`, strips configured `api_prefix` before forwarding to backend
+- Public tunnel is opt-in at runtime using `--url`; local/WLAN mode works without ngrok/cloudflared.
 
 ## Backend Auto-Detection
 
