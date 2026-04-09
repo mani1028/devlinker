@@ -104,7 +104,10 @@
       const minTime = 500;
       const start = Date.now();
       try {
-        const resp = await fetch(window.location.href, { headers: { "X-DevLinker-Instant": "1" } });
+        const resp = await fetch(window.location.href, {
+          headers: { "X-DevLinker-Instant": "1" },
+          cache: "no-store",
+        });
         const html = await resp.text();
         const elapsed = Date.now() - start;
         const delay = Math.max(0, minTime - elapsed);

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlinker"
-version = "1.4.6"
+version = "1.4.7"
 description = "A lightweight proxy that combines your frontend and backend into one link for easy development and sharing."
 authors = [
     { name = "Mani", email = "mani1028@users.noreply.github.com" }

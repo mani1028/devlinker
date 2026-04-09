@@ -608,11 +608,15 @@ async def _forward_http(request: Request) -> Response:
         loader_path = os.path.join(os.path.dirname(__file__), "devlinker_loader_instant.html")
         with open(loader_path, encoding="utf-8") as f:
             loader_html = f.read()
+        headers = _apply_cors_headers(
+            _apply_security_headers({"Vary": "X-DevLinker-Instant"}),
+            request,
+        )
         return Response(
             content=loader_html,
             status_code=200,
             media_type="text/html",
-            headers=_apply_cors_headers(_apply_security_headers({}), request),
+            headers=headers,
         )
     from devlinker.logger import print_warning
     from devlinker.detector_ai import DevLinkerAI
